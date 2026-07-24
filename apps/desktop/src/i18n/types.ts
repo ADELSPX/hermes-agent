@@ -502,6 +502,7 @@ export interface Translations extends NoticeTranslations {
       microphoneFailed: string
       microphoneInUse: string
       microphonePermissionDenied: string
+      microphoneSecureContextRequired: string
       microphoneStartFailed: string
       microphoneUnsupported: string
       noMicrophone: string
