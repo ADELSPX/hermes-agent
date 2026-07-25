@@ -161,6 +161,7 @@ import { ProfileRail } from './profile-switcher'
 import { ProjectDialog } from './project-dialog'
 import { filterToSessionBearingProjects, resolveLiveProjectFilter } from './project-filter'
 import {
+  EnteredMainSessionButton,
   excludeProjectSessions,
   orderProjectsByIds,
   overlayLiveLanes,
@@ -1877,6 +1878,11 @@ export function ChatSidebar({
                     )}
                     {inProject && enteredProject ? (
                       <div className="group/workspace flex shrink-0 items-center gap-0.5">
+                        <EnteredMainSessionButton
+                          onNewSession={onNewSessionInWorkspace}
+                          project={enteredProjectContent ?? enteredProject}
+                          repoWorktrees={scopedRepoWorktrees}
+                        />
                         {enteredProject.path && <StartWorkButton repoPath={enteredProject.path} />}
                         {/* Home has no folder and no record to rename, theme, or delete. */}
                         {!enteredProject.isNoProject && (
