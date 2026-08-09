@@ -92,13 +92,37 @@ def get_model_info(profile: Optional[str] = None):
     context length (so the UI can show "Auto-detected: 200K" beside the
     override) plus models.dev capabilities when available."""
     try:
-        model_cfg = _load_config_scoped(profile).get("model", "")
+        cfg = _load_config_scoped(profile)
+        model_cfg = cfg.get("model", "")
         model_name, provider = _main_model_fields(model_cfg)
         base_url = model_cfg.get("base_url", "") if isinstance(model_cfg, dict) else ""
         config_ctx = model_cfg.get("context_length") if isinstance(model_cfg, dict) else None
 
         if not model_name:
             return dict(_EMPTY_MODEL_INFO, provider=provider)
+
+        # MoA is a virtual provider: ``model.default`` holds a preset name that
+        # must still exist under ``moa.presets``. If the user deleted the preset
+        # after pinning it as the global default, surface the first valid
+        # existing preset — the same fallback ``normalize_moa_config`` already
+        # applies to ``moa.default_preset`` — instead of handing new desktop
+        # sessions a dead model name. ``stale_default`` lets the frontend warn.
+        stale_default = False
+        if provider == "moa" and model_name:
+            try:
+                from agent.errors import MoAPresetNotFoundError
+                from hermes_cli.moa_config import normalize_moa_config, resolve_moa_preset
+
+                moa_cfg = cfg.get("moa") or {}
+                try:
+                    resolve_moa_preset(moa_cfg, model_name)
+                except MoAPresetNotFoundError:
+                    stale_default = True
+                    model_name = normalize_moa_config(moa_cfg)["default_preset"]
+            except Exception:
+                # Never fail the endpoint for a validation nicety; if MoA
+                # config itself is broken, keep reporting model.default as-is.
+                stale_default = False
 
         try:
             # config_context_length=None: ignore the override — we want the auto value.
@@ -124,6 +148,7 @@ def get_model_info(profile: Optional[str] = None):
             "config_context_length": config_ctx_int,
             "effective_context_length": config_ctx_int or auto_ctx,  # what the agent actually uses
             "capabilities": caps,
+            "stale_default": stale_default,
         }
     except HTTPException:
         # Unknown/invalid profile must surface as 404, not degrade into a
