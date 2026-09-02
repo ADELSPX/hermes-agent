@@ -340,6 +340,17 @@ def is_titleable_user_message(user_message: str) -> bool:
             and not _attachment_only_opener(user_message))
 
 
+# Markdown code-fence delimiter: ``` or ~~~, optionally followed by an info
+# string (```json, ~~~python). A line that is only a fence carries no intent
+# worth titling — see derive_title.
+_FENCE_LINE_RE = re.compile(r"^\s*(?:`{3,}|~{3,})\s*[\w+.-]*\s*$")
+
+
+def _is_fence_line(line: str) -> bool:
+    """Return whether *line* is nothing but a markdown code-fence delimiter."""
+    return bool(_FENCE_LINE_RE.match(line or ""))
+
+
 def derive_title(user_message: str, title_preview: str | None = None) -> Optional[str]:
     """Instant title: first meaningful line trimmed to a word boundary. No model, never fails."""
     # Attachment-only opener, no paste preview: a file drop has no topic —
@@ -359,7 +370,10 @@ def _strip_title_prefix(text: str) -> str:
 
 
 def _first_line(text: str) -> str:
-    return next((ln.strip() for ln in text.splitlines() if ln.strip()), "")
+    """First line carrying real prose. A message that opens with a code fence (```json, ~~~py) or a
+    bare fence would otherwise be titled after the delimiter itself — every such session collides on
+    the same name and accumulates a "#N" suffix from the lineage deduper."""
+    return next((ln.strip() for ln in text.splitlines() if ln.strip() and not _is_fence_line(ln)), "")
 
 
 def _extract_json_title(raw: str) -> Optional[str]:
