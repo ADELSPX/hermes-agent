@@ -1135,6 +1135,9 @@ class CLICommandsMixin:
             return self._handoff_keep(
                 f"  {_t('handoff.usage')}", f"  {_t('handoff.usage_detail_1')}",
                 f"  {_t('handoff.usage_detail_2')}")
+        if platform_name == "desktop":
+            from hermes_cli.cli_handoff_desktop import handoff_to_desktop
+            return handoff_to_desktop(self)
         home = self._handoff_validate_target(platform_name)
         if home is None:
             return True
