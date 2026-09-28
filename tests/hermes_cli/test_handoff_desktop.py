@@ -1,7 +1,8 @@
 """``/handoff desktop`` hands a CLI session to the Desktop app through its deep link.
 
 Invariants: a launched link releases the CLI's ownership (lease + finalize skip) and exits;
-a link the OS could not open leaves the CLI session untouched.
+a link the OS could not open leaves the CLI session untouched; an empty session gets its
+state.db row before any handoff target is told to resume it.
 """
 
 from __future__ import annotations
@@ -63,3 +64,21 @@ def test_unopenable_link_keeps_the_cli_session():
     printed = " ".join(str(a) for call in cp.call_args_list for a in call.args)
     # The unroutable "custom" profile is dropped from the link the user is told to paste.
     assert "hermes://session/20260927_180000_ab12cd" in printed and "profile=" not in printed
+
+
+def test_prepare_creates_the_row_for_an_empty_session(tmp_path):
+    """Desktop (and a gateway switch_session) resume a ROW; an untouched session has never
+    flushed one, and set_session_title no longer inserts it."""
+    from types import SimpleNamespace
+
+    from hermes_cli.cli_commands_mixin import CLICommandsMixin
+    from hermes_state import SessionDB
+
+    db = SessionDB(db_path=tmp_path / "state.db")
+    cli = SimpleNamespace(_agent_running=False, _session_db=db, session_id="20260927_180000_ab12cd", model="m")
+    try:
+        assert db.get_session(cli.session_id) is None
+        assert CLICommandsMixin._handoff_prepare_session(cli) == cli.session_id[:8]
+        assert (db.get_session(cli.session_id) or {}).get("source") == "cli"
+    finally:
+        db.close()
