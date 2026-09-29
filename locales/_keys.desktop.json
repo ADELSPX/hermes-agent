@@ -2016,6 +2016,7 @@
     "notifications.voice.microphoneFailed",
     "notifications.voice.microphoneInUse",
     "notifications.voice.microphonePermissionDenied",
+    "notifications.voice.microphoneSecureContextRequired",
     "notifications.voice.microphoneStartFailed",
     "notifications.voice.microphoneUnsupported",
     "notifications.voice.noMicrophone",
