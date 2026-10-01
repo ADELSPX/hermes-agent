@@ -1,0 +1,76 @@
+name: Build runner images
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 4 * * 1"
+  push:
+    branches:
+      - build-custom-runner-images
+
+jobs: 
+  build-custom-windows-images:
+    strategy:
+      matrix:
+        base-image: [windows-latest-32-core, windows-32-arm-core]
+    name: build custom ${{ matrix.base-image }} image
+    runs-on: ${{ matrix.base-image }}
+    snapshot:
+      image-name: custom-${{ matrix.base-image }}
+      version: 1.*
+
+    steps:
+        - name: checkout the HA repo to get current pm tools
+          uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
+          with:
+            persist-credentials: false
+
+        - name: where are we installing from/to?
+          shell: pwsh
+          run: |
+            "workspace = $env:GITHUB_WORKSPACE"
+            "realpath  = $((Get-Item $env:GITHUB_WORKSPACE).ResolvedTarget)"
+            "LOCALAPPDATA = $env:LOCALAPPDATA"
+
+        - name: bake all the tools & test-time tools
+          shell: pwsh
+          run: |
+            . .\activate.ps1 -TestExtras 'all,telegram,anthropic,mistral,fal,modal,daytona,parallel-web'
+
+        - name: empty the checkout dir to make room for new checkouts
+          shell: pwsh
+          run: Get-ChildItem -Force -LiteralPath $env:GITHUB_WORKSPACE | Remove-Item -Recurse -Force
+
+  build-custom-linux-images:
+    strategy:
+      matrix:
+        base-image: [ubuntu-latest-32-core, ubuntu-latest-32-arm-core]
+    name: build custom ${{ matrix.base-image }} image
+    runs-on: ${{ matrix.base-image }}
+    snapshot:
+      image-name: custom-${{ matrix.base-image }}
+      version: 1.*
+
+    steps:
+      - name: checkout to get current pm tools
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: where are we installing from/to?
+        run: |
+          echo "workspace = $GITHUB_WORKSPACE"
+          echo "realpath  = $(realpath "$GITHUB_WORKSPACE")"
+          echo "HOME = $HOME, user = $(id -un)"
+
+      - name: system libs cua-driver links against
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libxi6 libx11-6 libxkbcommon0
+
+      - name: bake all the tools & test-time tools
+        run: |
+          # activate is written for non-errexit shells, so we gotta disable errexit to run this
+          set +euo pipefail
+          . ./activate --test-extras all,anthropic,bedrock,mistral,fal,modal,daytona,parallel-web
+          [ -n "$__HERMES_ACTIVATED" ] || { echo "activation failed"; exit 1; }
+
+      - name: empty the checkout dir to make room for new checkouts
+        run: find "$GITHUB_WORKSPACE" -mindepth 1 -delete
