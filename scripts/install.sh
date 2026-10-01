@@ -455,6 +455,7 @@ stage_repository() {
     fi
     if [ -d "$INSTALL_DIR/.git" ]; then
         log "Updating $INSTALL_DIR ($BRANCH)"
+        local migrated_treeless=false
         # An explicit HERMES_REPO_URL names the source for reruns too, not
         # just the first clone.
         if [ -n "${HERMES_REPO_URL:-}" ]; then
@@ -480,8 +481,25 @@ stage_repository() {
                 || log_warn "could not disable gc.writeCommitGraph in $INSTALL_DIR"
             git -C "$INSTALL_DIR" config fetch.writeCommitGraph false \
                 || log_warn "could not disable fetch.writeCommitGraph in $INSTALL_DIR"
+            # A treeless clone has no trees at all, so every path-filtered walk
+            # (the Desktop bundle-skew probe, installer staleness checks)
+            # lazy-fetches one tree per commit and strands one promisor pack
+            # each (#129514). Migrate it to blobless: trees stay local, file
+            # contents still arrive on demand.
+            if [ "$(git -C "$INSTALL_DIR" config --get remote.origin.partialclonefilter)" = tree:0 ]; then
+                git -C "$INSTALL_DIR" config remote.origin.partialclonefilter blob:none \
+                    || fail "cannot migrate the partial-clone filter in $INSTALL_DIR"
+                log "Migrating existing treeless checkout to a blobless partial clone"
+                migrated_treeless=true
+            fi
         fi
-        run_logged "Fetching origin/$BRANCH" git -C "$INSTALL_DIR" fetch origin "+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH" \
+        local fetch_args=(origin "+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH")
+        if [ "$migrated_treeless" = true ]; then
+            # Re-fetch objects under the new filter so old commits have their
+            # trees locally; changing the config alone leaves tree:0 gaps.
+            fetch_args=(--refetch "${fetch_args[@]}")
+        fi
+        run_logged "Fetching origin/$BRANCH" git -C "$INSTALL_DIR" fetch "${fetch_args[@]}" \
             || fail "git fetch failed"
         local stamp
         stamp="$(date -u +%Y%m%d-%H%M%S)"

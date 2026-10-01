@@ -790,8 +790,25 @@ function Stage-Repository {
                 }
             }
             Disable-TreelessGraphWrites $InstallDir
+            # A treeless clone has no trees at all, so every path-filtered walk
+            # (the Desktop bundle-skew probe) lazy-fetches one tree per commit
+            # and strands one promisor pack each (#129514). Migrate to blobless:
+            # trees stay local, file contents still arrive on demand.
+            $partialFilter = Invoke-Native { git -C $InstallDir config --get remote.origin.partialclonefilter }
+            if ("$partialFilter".Trim() -eq 'tree:0') {
+                Invoke-Native { git -C $InstallDir config remote.origin.partialclonefilter blob:none }
+                if ($LASTEXITCODE) { Fail "cannot migrate the partial-clone filter in $InstallDir" }
+                Log "Migrating existing treeless checkout to a blobless partial clone"
+                $migratedTreeless = $true
+            }
         }
-        Invoke-Logged "Fetching origin/$Branch" { git -C $InstallDir fetch origin "+refs/heads/${Branch}:refs/remotes/origin/${Branch}" }
+        if ($migratedTreeless) {
+            # Re-fetch under the new filter so historical commits carry their
+            # trees locally; changing the config alone leaves tree:0 gaps.
+            Invoke-Logged "Fetching origin/$Branch (blobless migration)" { git -C $InstallDir fetch --refetch origin "+refs/heads/${Branch}:refs/remotes/origin/${Branch}" }
+        } else {
+            Invoke-Logged "Fetching origin/$Branch" { git -C $InstallDir fetch origin "+refs/heads/${Branch}:refs/remotes/origin/${Branch}" }
+        }
         if ($LASTEXITCODE) { Fail "git fetch failed" }
         $stamp = (Get-Date -Format 'yyyyMMdd-HHmmss')
         # Park local work BEFORE switching branches: checkout refuses a dirty
