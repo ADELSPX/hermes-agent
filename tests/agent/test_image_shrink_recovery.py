@@ -97,6 +97,26 @@ class TestImageTooLargeClassification:
         assert result.reason == FailoverReason.image_too_large
         assert result.retryable is True
 
+    def test_vllm_400_qwen3vl_processor_failure(self):
+        """vLLM serving a Qwen3-VL model rejects an oversized native image part in
+        the vision processor, with wording that names no image-size vocabulary:
+        "Failed to apply Qwen3VLProcessor on data={'text': '...', 'images':
+        [<PIL.Image.Image image mode=RGB size=5120x1440 at 0x...>]}". It fell to
+        format_error / non-retryable, so the shrink recovery never fired and the
+        native-image turn degraded all the way to the text-mode fallback even
+        though the same image succeeds after a resize (#76505)."""
+        err = _FakeApiError(
+            status_code=400,
+            message=(
+                "Failed to apply Qwen3VLProcessor on data={'text': 'describe this image', "
+                "'images': [<PIL.Image.Image image mode=RGB size=5120x1440 at 0x7607095144D0>]} "
+                "with kwargs={'return_tensors': 'pt'}"
+            ),
+        )
+        result = classify_api_error(err, provider="custom", model="groxaxo/Qwen3.6-27B-GPTQ-Pro-4bit")
+        assert result.reason == FailoverReason.image_too_large
+        assert result.retryable is True
+
     def test_unrelated_400_still_not_image_too_large(self):
         """The new "media" patterns must not widen into ordinary 400s."""
         err = _FakeApiError(

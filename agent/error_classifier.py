@@ -194,10 +194,15 @@ _PAYLOAD_TOO_LARGE_PATTERNS = (
 # maximum allowed (M, from `StreamReadConstraints.getMaxStringLength()`)"). Only an inline
 # image reaches those sizes, so shrinking is the recovery; the method-scoped Jackson token
 # is used because the bare class name also appears when Jackson caps a *token* length.
+# "failed to apply qwen3vlprocessor": vLLM rejects an image part its vision processor can't
+# fit (e.g. a 5120x1440 native screenshot) with wording that names no image-size
+# vocabulary; without this pattern it fell to format_error, bypassing the shrink recovery
+# and degrading native image turns to the text-mode fallback (#76505).
 _IMAGE_TOO_LARGE_PATTERNS = (
     "image exceeds", "image too large", "image_too_large", "image size exceeds", "image dimensions exceed",
     "dimensions exceed max allowed size", "max allowed size: 8000", "media exceeds", "media too large",
     "patches after processing", "make sure your payload is below", "streamreadconstraints.getmaxstringlength",
+    "failed to apply qwen3vlprocessor",
 )
 
 # Undecodable image bytes → strip-and-retry, never shrink. xAI wordings
