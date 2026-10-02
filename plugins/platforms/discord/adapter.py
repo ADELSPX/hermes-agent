@@ -725,15 +725,42 @@ class VoiceReceiver:
         self._paused = False
         # Debug logging counter (instance-level to avoid cross-instance races)
         self._packet_debug_count = 0
+        # --- Re-key recovery state (issue #77968) ---
+        # Discord voice credentials rotate after start(): a DAVE re-key (any voice
+        # membership change) replaces the MLS session and a voice reconnect (server
+        # failover, region move) rotates the transport secret_key. Decrypt-failure
+        # streaks therefore re-resolve credentials from the LIVE connection.
+        self._decrypt_fail_streak = 0     # consecutive NaCl decrypt failures
+        self._dave_fail_streak = 0       # consecutive DAVE decrypt failures
+        # Decode-health counters: one-line diagnosis of a "deaf" session (#77968).
+        self._health = {"ok": 0, "decrypt_failed": 0, "dave_failed": 0, "unmapped_dropped": 0}
+        # warn every Nth failure of a streak, never fall fully silent (pre-fix
+        # behavior went dark after 10 packets and hid permanent deafness)
+        self._fail_warn_every = 100
 
     # --- Lifecycle ---
 
-    def start(self):
-        """Start listening for voice packets."""
+    def _sync_credentials(self, reason: str) -> None:
+        """Re-resolve voice credentials from the LIVE connection (#77968).
+
+        ``start()`` snapshotted ``secret_key``/``dave_session`` once; after a
+        DAVE re-key or voice reconnect those go stale and every subsequent
+        decrypt fails forever. Always read the current ``self._vc._connection``:
+        a reconnect replaces the connection object itself.
+        """
         conn = self._vc._connection
         self._secret_key = bytes(conn.secret_key)
         self._dave_session = conn.dave_session
         self._bot_ssrc = conn.ssrc
+        logger.info(
+            "VoiceReceiver credentials re-resolved (%s, bot_ssrc=%d)",
+            reason, self._bot_ssrc,
+        )
+
+    def start(self):
+        """Start listening for voice packets."""
+        self._sync_credentials("start")
+        conn = self._vc._connection
         self._install_speaking_hook(conn)
         conn.add_socket_listener(self._on_packet)
         self._running = True
@@ -751,7 +778,11 @@ class VoiceReceiver:
             self._last_packet_time.clear()
             self._decoders.clear()
             self._ssrc_to_user.clear()
-        logger.info("VoiceReceiver stopped")
+        h = self._health
+        logger.info(
+            "VoiceReceiver stopped (decode health: ok=%d decrypt_failed=%d dave_failed=%d unmapped_dropped=%d)",
+            h["ok"], h["decrypt_failed"], h["dave_failed"], h["unmapped_dropped"],
+        )
 
     def pause(self):
         self._paused = True
@@ -844,9 +875,16 @@ class VoiceReceiver:
             import nacl.secret  # noqa: E402 — delayed import, only in voice path
             box = nacl.secret.Aead(self._secret_key)
             decrypted = box.decrypt(encrypted, header, bytes(nonce))
+            self._decrypt_fail_streak = 0
         except Exception as e:
-            if self._packet_debug_count <= 10:
-                logger.warning("NaCl decrypt failed: %s (hdr=%d, enc=%d)", e, header_size, len(encrypted))
+            self._decrypt_fail_streak += 1
+            self._health["decrypt_failed"] += 1
+            if self._should_warn_failure(self._decrypt_fail_streak):
+                logger.warning(
+                    "NaCl decrypt failed (streak=%d, last error: %s; hdr=%d, enc=%d)",
+                    self._decrypt_fail_streak, e, header_size, len(encrypted),
+                )
+            self._maybe_refresh_credentials(self._decrypt_fail_streak)
             return
         # Skip encrypted extension data to get the actual opus payload
         if ext_data_len and len(decrypted) > ext_data_len:
@@ -878,13 +916,33 @@ class VoiceReceiver:
                     decrypted = self._dave_session.decrypt(
                         user_id, davey.MediaType.audio, decrypted
                     )
+                    self._dave_fail_streak = 0
                 except Exception as e:
                     # Unencrypted passthrough — use NaCl-decrypted data as-is
-                    if "Unencrypted" not in str(e):
-                        if self._packet_debug_count <= 10:
-                            logger.warning("DAVE decrypt failed for ssrc=%d: %s", ssrc, e)
+                    if "Unencrypted" in str(e):
+                        self._dave_fail_streak = 0
+                    else:
+                        self._dave_fail_streak += 1
+                        self._health["dave_failed"] += 1
+                        if self._should_warn_failure(self._dave_fail_streak):
+                            logger.warning(
+                                "DAVE decrypt failed for ssrc=%d (streak=%d, last error: %s)",
+                                ssrc, self._dave_fail_streak, e,
+                            )
+                        # A re-key/reconnect replaced the DAVE session; re-resolve
+                        # from the live connection instead of failing forever.
+                        self._maybe_refresh_credentials(self._dave_fail_streak)
                         return
-            # Unknown SSRC (no SPEAKING yet): skip DAVE, try Opus directly; user_id arrives with SPEAKING.
+            else:
+                # Unknown SSRC under ACTIVE DAVE: the NaCl-decrypted payload is
+                # still DAVE ciphertext — feeding it to opus shreds the speaker's
+                # audio. Drop until the SPEAKING op-5 maps this SSRC (#77968).
+                self._health["unmapped_dropped"] += 1
+                if self._packet_debug_count <= 10:
+                    logger.debug(
+                        "Dropped DAVE ciphertext for unmapped ssrc=%d (no SPEAKING yet)", ssrc
+                    )
+                return
         try:
             if ssrc not in self._decoders:
                 self._decoders[ssrc] = discord.opus.Decoder()
@@ -892,11 +950,32 @@ class VoiceReceiver:
             with self._lock:
                 self._buffers[ssrc].extend(pcm)
                 self._last_packet_time[ssrc] = time.monotonic()
+            self._health["ok"] += 1
         except Exception as e:
             with self._lock:
                 self._decoders.pop(ssrc, None)
             logger.debug("Opus decode error for SSRC %s; reset decoder: %s", ssrc, e)
             return
+
+    def _should_warn_failure(self, streak: int) -> bool:
+        """Warn on the first failure of a streak, then every Nth — a persistent
+        failure stays visible in the logs instead of going dark after the first
+        10 packets (#77968)."""
+        return streak == 1 or streak % self._fail_warn_every == 0
+
+    def _maybe_refresh_credentials(self, streak: int) -> None:
+        """On a decrypt-failure streak, re-resolve credentials from the LIVE
+        connection (#77968). The re-key (DAVE epoch bump or transport key
+        rotation after a voice reconnect) is not otherwise observable here, so
+        the streak IS the trigger; the 8-packet threshold filters transient
+        corruption. Refresh at the first streak hit, then on the same cadence as
+        failure warnings — never on every packet."""
+        if streak < 8 or (streak != 8 and streak % self._fail_warn_every != 0):
+            return
+        try:
+            self._sync_credentials(f"decrypt-failure streak={streak}")
+        except Exception as e:
+            logger.warning("Credential refresh failed: %s", e)
 
     # --- Silence detection ---
 
