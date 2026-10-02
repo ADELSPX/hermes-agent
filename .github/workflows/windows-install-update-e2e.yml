@@ -27,7 +27,7 @@ concurrency:
 jobs:
   install-update:
     name: Windows install.ps1 + hermes update E2E
-    runs-on: windows-latest-32-core
+    runs-on: custom-windows-latest-32-core
     # A typical run is ~17 min; one slow runner took 28 min for the same work (run 36295230146).
     timeout-minutes: 50
     steps:
@@ -37,14 +37,6 @@ jobs:
           # serve.git is a bare clone of this checkout: the installer's treeless clone and
           # `hermes update` need real history and release tags (version identity), as on GitHub.
           fetch-depth: 0
-
-      - name: Set up locked Python and test dependencies
-        uses: ./.github/actions/setup-pm
-        with:
-          packages: git,ripgrep
-          extras: '["all", "telegram", "anthropic", "mistral", "fal", "modal", "daytona", "parallel-web"]'
-          test-environment: 'true'
-          prune-python-cache: true
 
       - name: Run Windows install + update E2E
         shell: bash

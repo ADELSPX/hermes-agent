@@ -31,7 +31,7 @@ on:
         default: false
   pull_request:
   push:
-    branches: [main]
+    branches: [main, build-custom-runner-images ]
 
 permissions:
   contents: read
@@ -79,8 +79,8 @@ jobs:
       mcp_catalog: ${{ steps.gate-lanes.outputs.mcp_catalog }}
       e2e: ${{ steps.gate-lanes.outputs.e2e }}
       e2e_upgrade: ${{ steps.gate-lanes.outputs.e2e_upgrade }}
-      e2e_desktop_core: ${{ steps.gate-lanes.outputs.e2e_desktop_core }}
-      e2e_desktop_update: ${{ steps.gate-lanes.outputs.e2e_desktop_update }}
+      e2e_desktop_core: true
+      e2e_desktop_update: true
       ci_review: ${{ steps.classify.outputs.ci_review }}
       ci_review_files: ${{ steps.classify.outputs.ci_review_files }}
       event_name: ${{ github.event_name }}

@@ -104,20 +104,12 @@ jobs:
   bundled-e2e:
     name: packaged bundle (open-app-update)
     if: inputs.install-method == 'packaged-app' && inputs.update-method == 'open-app-update'
-    runs-on: ${{ inputs.bundle-arch == 'arm64' && 'windows-latest-32-arm-core' || 'windows-latest-32-core' }}
+    runs-on: ${{ inputs.bundle-arch == 'arm64' && 'windows-latest-32-arm-core' || 'custom-windows-latest-32-core' }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
         with:
-          ref: ${{ github.sha }}
-      - name: Set up driver tools only
-        uses: ./.github/actions/setup-pm
-        with:
-          toolchain: all
-          packages: ffmpeg
-          cache: false
-          cache-python: false
-          cache-node: false
+          ref: ${{ github.sha }}      
       - name: Install locked chat driver dependencies
         shell: bash
         run: npm ci --workspace tests-js --include-workspace-root --omit=dev --ignore-scripts --no-audit --no-fund
@@ -174,7 +166,7 @@ jobs:
         || (contains(fromJSON('["installer-script+desktop", "hermes-desktop-app-update", "desktop-installer@latest"]'), inputs.update-method) && inputs.tag-has-desktop)
         || (inputs.update-method == 'open-app-update' && inputs.tag-has-desktop
             && contains(fromJSON('["desktop-installer@latest", "installer-script+desktop"]'), inputs.install-method)))
-    runs-on: windows-latest-32-core
+    runs-on: 'custom-windows-latest-32-core'
     timeout-minutes: ${{ inputs.timeout-minutes }}
 
     env:
@@ -193,17 +185,6 @@ jobs:
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
-
-      # Old installers refresh PATH after winget installs ripgrep, dropping the
-      # process-only uv path. Supply the tool before running those shipped scripts.
-      - name: Set up driver tools only
-        uses: ./.github/actions/setup-pm
-        with:
-          toolchain: all
-          packages: ffmpeg,ripgrep
-          cache: false
-          cache-python: false
-          cache-node: false
 
       - name: Install locked chat driver dependencies
         shell: bash

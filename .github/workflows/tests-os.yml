@@ -208,19 +208,11 @@ jobs:
     # 32-core like os-tests' Windows row: seven files run in parallel and each spawns
     # process trees; on the 4-vCPU image the suite step took 153-171 s (job 4.7-5.6 min),
     # here 124 s (job 3.1 min), with headroom against scheduling-starved timeouts.
-    runs-on: windows-latest-32-core
+    runs-on: custom-windows-latest-32-core
     timeout-minutes: 25
     steps:
       - name: Checkout code
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
-
-      - name: Set up locked Python and test dependencies
-        uses: ./.github/actions/setup-pm
-        with:
-          packages: git,ripgrep
-          extras: '["all", "telegram", "anthropic", "mistral", "fal", "modal", "daytona", "parallel-web"]'
-          test-environment: 'true'
-          prune-python-cache: true
 
       - name: Run Windows E2E suite
         shell: bash
