@@ -34,17 +34,25 @@ class KeylessMCPError(RuntimeError):
 
 
 _RATE_LIMIT_MARKERS = ("rate limit", "rate-limit", "ratelimit", "too many requests", "429", "quota exceeded", "slow down")
+# Free-tier endpoints also refuse anonymous traffic with HTTP 403 ("Client error '403
+# Forbidden'", "HTTP 403: ...") — another vendor's free tier still works, so it is
+# as failover-worthy as a 429. A 400 stays a hard stop: a malformed request fails everywhere.
+_FORBIDDEN_MARKERS = ("403", "forbidden")
+
+
+def _is_rate_limitish(message: str) -> bool:
+    """Heuristic: does an error message look like free-tier throttling or an anonymous
+    access refusal (403) — something a *different* vendor's free tier survives — rather
+    than a request defect the whole ring would reject?"""
+    lowered = (message or "").lower()
+    return any(marker in lowered for marker in _RATE_LIMIT_MARKERS + _FORBIDDEN_MARKERS)
+
 
 # vendor -> (display label, env key, signup URL) for the standard failure hint.
 _VENDOR_HINTS = {
     "exa": ("Exa", "EXA_API_KEY", "https://exa.ai"), "parallel": ("Parallel", "PARALLEL_API_KEY", "https://parallel.ai"),
     "firecrawl": ("Firecrawl", "FIRECRAWL_API_KEY", "https://firecrawl.dev"), "keenable": ("Keenable", "KEENABLE_API_KEY", "https://keenable.ai"),
 }
-
-
-def _is_rate_limitish(message: str) -> bool:
-    """Heuristic: does an error message look like free-tier throttling?"""
-    return any(marker in (message or "").lower() for marker in _RATE_LIMIT_MARKERS)
 
 
 def _fail_msg(vendor: str, kind: str, exc: Any, *, other_backends: bool = True) -> str:

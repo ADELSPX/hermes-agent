@@ -543,6 +543,67 @@ class TestKeylessFailover:
         assert out["success"] is False
         assert "all keyless vendors throttled" in out["error"]
 
+    def test_search_fails_over_on_anonymous_403(self, monkeypatch):
+        """Free-tier vendors also refuse anonymous traffic with HTTP 403 (e.g. Firecrawl's
+        ``Client error '403 Forbidden'``); the ring must advance just like a 429."""
+        self._pin(monkeypatch, "firecrawl")
+        monkeypatch.setitem(
+            keyless_mcp._KEYLESS_SEARCHERS, "firecrawl",
+            lambda q, l: {"success": False, "error": "Keyless Firecrawl search failed: Client error '403 Forbidden' for url https://api.firecrawl.dev/v2/search. Set FIRECRAWL_API_KEY for reliable service."},
+        )
+        called = []
+        monkeypatch.setitem(
+            keyless_mcp._KEYLESS_SEARCHERS, "keenable",
+            lambda q, l: called.append(1) or self._ok("keenable"),
+        )
+        out = keyless_mcp.search_with_failover("firecrawl", "q", 3)
+        assert out["success"] is True, out
+        assert out["data"]["served_by"] == "keenable"
+        assert called  # peer actually served
+
+    @pytest.mark.parametrize("error", ["HTTP 403: forbidden", "Client error '403 Forbidden' for url https://x"])
+    def test_search_fails_over_on_403_shaped_transport_errors(self, monkeypatch, error):
+        self._pin(monkeypatch, "exa")
+        monkeypatch.setitem(
+            keyless_mcp._KEYLESS_SEARCHERS, "exa",
+            lambda q, l: {"success": False, "error": f"Keyless Exa search failed: {error}. Set EXA_API_KEY for reliable service."},
+        )
+        monkeypatch.setitem(keyless_mcp._KEYLESS_SEARCHERS, "parallel", lambda q, l: self._ok("parallel"))
+        out = keyless_mcp.search_with_failover("exa", "q", 3)
+        assert out["success"] is True, out
+        assert out["data"]["served_by"] == "parallel"
+
+    def test_search_no_failover_on_400_bad_request(self, monkeypatch):
+        """A 400 means the request itself is bad — every vendor would refuse it, so
+        failing over would waste calls. The walk must stop."""
+        self._pin(monkeypatch, "exa")
+        monkeypatch.setitem(
+            keyless_mcp._KEYLESS_SEARCHERS, "exa",
+            lambda q, l: {"success": False, "error": "Keyless Exa search failed: Client error '400 Bad Request' for url https://x"},
+        )
+        called = []
+        monkeypatch.setitem(
+            keyless_mcp._KEYLESS_SEARCHERS, "parallel",
+            lambda q, l: called.append(1) or self._ok("parallel"),
+        )
+        out = keyless_mcp.search_with_failover("exa", "q")
+        assert out["success"] is False
+        assert "400 Bad Request" in out["error"]
+        assert not called  # peer never tried
+
+    def test_extract_fails_over_when_all_urls_403(self, monkeypatch):
+        """Extract shares the throttle predicate: a 403 on every URL advances the ring."""
+        self._pin(monkeypatch, "firecrawl")
+        forbidden = [
+            {"url": u, "title": "", "content": "", "error": "Client error '403 Forbidden' for url https://api.firecrawl.dev/v2/scrape"}
+            for u in ("https://a", "https://b")
+        ]
+        good = [{"url": "https://a", "title": "A", "content": "x"}, {"url": "https://b", "title": "B", "content": "y"}]
+        monkeypatch.setitem(keyless_mcp._KEYLESS_EXTRACTORS, "firecrawl", lambda urls: forbidden)
+        monkeypatch.setitem(keyless_mcp._KEYLESS_EXTRACTORS, "keenable", lambda urls: good)
+        out = keyless_mcp.extract_with_failover("firecrawl", ["https://a", "https://b"])
+        assert out == good
+
     def test_search_walks_ring_past_multiple_throttles(self, monkeypatch):
         # exa -> parallel all throttled; firecrawl serves.
         self._pin(monkeypatch, "exa")
