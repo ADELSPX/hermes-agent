@@ -148,10 +148,13 @@ def test_update_and_upstream_network_calls_disable_terminal_prompts(monkeypatch,
     assert update_cmd_git._sync_with_upstream_if_needed(["git"], tmp_path, assume_yes=True)
     from hermes_cli.update_custody import git_subcommand
 
-    # The fork's fast-forward is local (`merge --ff-only upstream/main` after the fetch): no
-    # credential helper ever runs under the checkout lock fd a mutator inherits (R2).
-    assert [git_subcommand(args) for args, _ in calls] == ["fetch", "fetch", "merge", "push"]
-    for args, kwargs in calls:
+    # The fork push runs only after the update is validated (_push_synced_fork), never inside the sync.
+    update_cmd_git._sync_fork_with_upstream(["git"], tmp_path)
+    # The fork's fast-forward is local (`merge --ff-only` after the fetch): no credential helper ever
+    # runs under the checkout lock fd a mutator inherits (R2).
+    network = [(args, kwargs) for args, kwargs in calls if git_subcommand(args) in {"fetch", "pull", "push", "merge"}]
+    assert [git_subcommand(args) for args, _ in network] == ["fetch", "fetch", "merge", "push"]
+    for args, kwargs in network:
         assert kwargs["stdin"] is subprocess.DEVNULL, args
         env = kwargs["env"]
         assert env["GIT_TERMINAL_PROMPT"] == "0", args
