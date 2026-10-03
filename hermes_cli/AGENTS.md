@@ -177,7 +177,10 @@ it guards. `plan → snapshot → apply → restart-per-kind → verify → repo
   `logs/update_receipts/` (never a sticky profile's; `update.log` likewise) — `latest.json` pointer;
   steps, skips WITH reasons, restart outcome, plan, fleet snapshot, `followups`. The receipt is on
   disk as `outcome: "running"` from the start and refreshed at each stage boundary; the next
-  update marks a `running` record whose processes are gone `interrupted` and says so.
+  update marks a `running` record whose processes are gone `interrupted` and says so. Readers
+  (`hermes logs update`, debug bundle, dashboard status, pm receipts) use the root home too.
+  A dependency-sync failure in the completion bootstrap is a `dependencies` follow-up (A6), and
+  Ctrl-C after the commit point finalizes `interrupted` (exit 130), never `failed`.
   Before a source swap, the parent captures plan/snapshots/receipt and its Windows pause token.
   `update_completion.py` runs new-code PM preparation with site initialization disabled, then
   selected-Python builds, maintenance, scans/restarts and verification. Git/current/ZIP share
