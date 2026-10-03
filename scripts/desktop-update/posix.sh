@@ -683,7 +683,7 @@ deliver_outcome() { # the truth-determining half: swap bundles / gate the relaun
   else
     linux_gate
     if [ "$GATE" != "relaunch" ] && [ "$FINAL_CODE" -eq 0 ]; then
-      DONE_NOTE="$GATE_MSG"
+      DONE_NOTE="${DONE_NOTE:+$DONE_NOTE }$GATE_MSG"
       add_warning "relaunch" "$GATE: $GATE_MSG"
     fi
   fi
@@ -1223,6 +1223,16 @@ fi
 trap 'on_signal TERM' TERM
 
 if [ "$CODE" -eq 0 ]; then FINAL_CODE=0 FINAL_MSG="Update complete."
+  # Contract C3: a Desktop build that fails after the code committed is an owed
+  # follow-up (hermes update exits 0 and prints it). The user is on the new
+  # Hermes, but this app was not rebuilt: say so and say how to fix it, never
+  # "finished OK" and never "still on the previous version".
+  if printf '%s' "$OUT" | grep -Eq "Update follow-up 'build' did not finish: .*(desktop app build|Node dependencies)"; then
+    APP_REBUILD_FAILED=1
+    DONE_NOTE="Hermes was updated, but the Desktop app could not be rebuilt, so it still runs its old build. Run hermes desktop --force-build in a terminal to rebuild it; the update log has the build error."
+    log "desktop app build is an owed follow-up of the committed update"
+    add_warning "desktop-rebuild" "hermes update could not build the Desktop app"
+  fi
 else
   FINAL_CODE="$CODE" FINAL_MSG="Update failed (exit $CODE). Run hermes debug share in a terminal to send a report."
   # The bricked-venv class is fixable and must not read as a generic exit 1:
