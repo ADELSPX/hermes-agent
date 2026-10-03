@@ -156,7 +156,10 @@ class TestCommandBoundaryFinalization:
         payload = json.loads(path.read_text(encoding="utf-8"))
         assert payload["outcome"] == "refused"
         assert payload["exit_code"] == 2
-        assert payload["stop_reason"] == "sys.exit(2)"
+        # The recorded failing step is appended to the exit (#132089); the leading code and the
+        # refused outcome are the contract, not the exact sentence.
+        assert payload["stop_reason"].startswith("sys.exit(2)")
+        assert "windows_preflight" in payload["stop_reason"]
         assert payload["finished_at"] is not None
         assert ur.current_correlation_id() is None
 
@@ -236,7 +239,10 @@ class TestCommandBoundaryFinalization:
         assert latest is not None
         assert latest["outcome"] == "refused"
         assert latest["exit_code"] == 2
-        assert latest["stop_reason"] == "sys.exit(2)"
+        # #132089: the boundary appends what the run recorded before it exited, so the reason
+        # names the preflight that stopped it. The exit code itself is what stays exact.
+        assert latest["stop_reason"].startswith("sys.exit(2)")
+        assert "windows_preflight" in latest["stop_reason"]
         assert latest["steps"][0]["name"] == "windows_preflight"
         assert ur.current_correlation_id() is None
         # exactly-once: exactly one receipt file

@@ -261,7 +261,10 @@ class TestRefusalIsNotFailure:
         # refusal — not failure, and certainly not success.
         latest = ur.read_latest_receipt()
         assert latest["outcome"] == "refused"
-        assert latest["stop_reason"] == "sys.exit(2)"
+        # #132089: the boundary names the preflight that refused, so the reason is the exit code
+        # plus the recorded detail. Refusal-vs-failure is decided by outcome/exit_code, not here.
+        assert latest["stop_reason"].startswith("sys.exit(2)")
+        assert latest["stop_reason"] != failed["stop_reason"]
 
     def test_refused_receipt_survives_with_its_steps(self, receipt_home):
         """#91439: the refused run's receipt keeps the evidence of WHY —

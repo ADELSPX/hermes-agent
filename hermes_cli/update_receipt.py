@@ -131,6 +131,18 @@ class UpdateReceipt:
 
     def step(self, name: str, ok: bool, detail: str = "") -> None:
         self.data["steps"].append({"name": name, "ok": bool(ok), "detail": detail, "at": _utc_now_iso()})
+        # A step that reports its own failure is the most specific "why" this run has; the
+        # boundary stop_reason reads it back (see exit_context).
+        if not ok and detail:
+            self.data["last_failure"] = {"name": name, "detail": detail, "at": _utc_now_iso()}
+
+    def mark(self, name: str) -> None:
+        """Name the step now in progress, so a bare exit says where it died (#132089).
+
+        ``steps`` only records what FINISHED; a process killed between two steps leaves a
+        receipt whose every recorded step is green and no clue which one it was inside.
+        """
+        self.data["current_step"] = name
 
     def skip(self, name: str, reason: str) -> None:
         self.data["skips"].append({"name": name, "reason": reason, "at": _utc_now_iso()})
@@ -244,6 +256,31 @@ def _record(method: str, what: str, *args: Any, **kwargs: Any) -> None:
 def record_step(name: str, ok: bool, detail: str = "") -> None:
     """Record one update step outcome. No-op when no receipt is active."""
     _record("step", f"update step {name}", name, ok, detail)
+
+
+def record_current_step(name: str) -> None:
+    """Name the step about to run; a later bare ``sys.exit`` reports it as the stop reason (#132089)."""
+    _record("mark", f"update step {name} in progress", name)
+
+
+def exit_context() -> str:
+    """Diagnosable suffix for a boundary stop reason: the step in progress, or the last failure.
+
+    ``sys.exit(1)`` alone cannot say which of the update's many early exits fired, and the
+    captured stdout it printed is gone by the time anyone reads the receipt under a scheduler
+    that discards it. Returns ``""`` when the run recorded nothing to add, so callers keep
+    their existing reason verbatim.
+    """
+    current = _current.get()
+    if current is None:
+        return ""
+    step = str(current.data.get("current_step") or "").strip()
+    failure = current.data.get("last_failure") or {}
+    detail = str(failure.get("detail") or "").strip()
+    if detail:
+        named = f"{failure.get('name')}: {detail}" if failure.get("name") else detail
+        return f" during {named}" if not step else f" during {step} ({named})"
+    return f" during {step}" if step else ""
 
 
 def record_skip(name: str, reason: str) -> None:
@@ -438,6 +475,10 @@ def finalize_pending_update_receipt(exit_code: Optional[int] = None, stop_reason
             clone.data = copy.deepcopy(current.data)
             clone.data["exit_code"] = int(exit_code)
             _current.set(clone)
+    if outcome != "success" and stop_reason:
+        # A bare "sys.exit(1)" names no step; the exit the caller could not attribute is
+        # attributed here from what the run recorded before it died (#132089).
+        stop_reason = f"{stop_reason}{exit_context()}"
     return finalize_update_receipt(outcome, stop_reason=stop_reason)
 
 

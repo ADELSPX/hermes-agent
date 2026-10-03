@@ -238,6 +238,18 @@ def _record_update_skip(step: str, reason: str) -> None:
         record_skip(step, reason)
 
 
+def _mark_current_step(step: str) -> None:
+    """Best-effort ``update_receipt.record_current_step``; names the step an exit can be blamed on.
+
+    ``steps`` records only finished work, so a run that dies between two of them leaves a
+    receipt whose every step is green and nothing saying where — the boundary then stamps a
+    bare ``sys.exit(1)`` as the whole post-mortem (#132089).
+    """
+    with suppress(Exception):
+        from hermes_cli.update_receipt import record_current_step
+        record_current_step(step)
+
+
 def _record_pre_update_backup_outcome(args, snapshot_id) -> None:
     """Record the pre-update backup as a skip when it was disabled, else as a step.
 
@@ -737,6 +749,7 @@ def _source_completion_request(opts, plan, snapshot_id, windows_resume, desktop,
 
 def _complete_source_update(request: dict | None) -> None:
     # Never "Update complete!" while this run's local patches sit unrestored in the stash (#122557).
+    _mark_current_step("apply")
     unrestored = _unrestored_autostash_notice()
     if request is None:
         if unrestored:
@@ -1436,6 +1449,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
     # _old_updater.in_historical_update(); historical on-disk updaters do not
     # declare this local, so only they hand off through retired shims.
     _hermes_current_updater_frame = True
+    _mark_current_step("preflight")
     git_operation = git_operation_in_progress(_m().PROJECT_ROOT)
     if git_operation:
         root = _m().PROJECT_ROOT
@@ -1443,17 +1457,26 @@ def _cmd_update_impl(args, gateway_mode: bool):
         print(f"  Finish it or run `git {git_operation} --abort`, then re-run `hermes update`.")
         sys.exit(1)
 
+    # Self-heal abandoned .git/*.lock files (a crashed fetch) and aborted-transfer pack temps
+    # before anything else touches the checkout. Run at START, not only in the apply path
+    # below: a run that dies between here and the fetch would otherwise leave the next run to
+    # fail with "File exists" until an operator removed the lock by hand (#132089). Idempotent,
+    # and _sweep_stale skips everything while a git process holds it.
+    _check.clear_git_debris(_m().PROJECT_ROOT)
+
     opts = _resolve_update_options(args, gateway_mode)
     gw_input_fn, assume_yes = opts.gw_input_fn, opts.assume_yes
 
     print("☤ Updating Hermes Agent...")
     print()
 
+    _mark_current_step("plan")
     _pre_update_plan = _begin_update_receipt_and_plan(args)
 
     # Backup before any git/file mutation; the snapshot id (None if disabled/failed) feeds
     # the post-update cron-jobs safety net. A deliberate opt-out is recorded as a skip with its
     # reason, not as a failed step (see _record_pre_update_backup_outcome).
+    _mark_current_step("snapshot")
     pre_update_snapshot_id = _m()._run_pre_update_backup(args)
     _record_pre_update_backup_outcome(args, pre_update_snapshot_id)
     _record_snapshot_stage(args, pre_update_snapshot_id)
@@ -1533,17 +1556,6 @@ def _cmd_update_impl(args, gateway_mode: bool):
         return
 
     try:
-        # Self-heal abandoned .git/*.lock files (crashed fetch) or the fetch fails "File exists".
-        from hermes_cli.gitlock import clear_stale_git_locks, clear_stale_tmp_packs
-        cleared = clear_stale_git_locks(_m().PROJECT_ROOT)
-        if cleared:
-            print("  (removed stale git lock(s): %s)" % ", ".join(cleared))
-        swept = clear_stale_tmp_packs(_m().PROJECT_ROOT)
-        if swept:
-            print("  (removed %d aborted-fetch pack temp file(s))" % len(swept))
-        # A partial clone must never write a commit-graph (#127711); keep its keys in place.
-        from hermes_cli.gitlock import settle_partial_clone_maintenance
-        settle_partial_clone_maintenance(_m().PROJECT_ROOT)
         # Shallow installer checkouts collect one `.git/shallow` graft per past depth-1 fetch
         # (#105951); stale grafts break merge-base and push this run into the divergence path.
         from hermes_cli.gitlock import repair_broken_shallow_boundaries, prune_stale_shallow_grafts
@@ -1565,6 +1577,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
         _heal_stale_shallow_checkout(_m().PROJECT_ROOT, branch)
 
         print("→ Fetching updates...")
+        _mark_current_step("fetch")
         if release_sha:
             fetch_args = ["fetch", "--no-tags", "origin", target_ref]
         else:
@@ -1581,6 +1594,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
             _m()._resume_windows_gateways_after_update(_windows_gateway_resume)
             sys.exit(1)
 
+        _mark_current_step("checkout")
         current_branch = _current_branch_name(git_cmd, check=True)
         _plan = _prepare_checkout_for_update(
             git_cmd, branch, current_branch, is_fork=is_fork, assume_yes=assume_yes,
@@ -1605,6 +1619,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
             print("→ Updates available (commit count unknown on this shallow checkout)")
 
         print("→ Pulling updates...")
+        _mark_current_step("pull")
         movement_baseline = _pull_updates(
             git_cmd, branch, _plan.auto_stash_ref, prompt_for_restore=_plan.prompt_for_restore,
             gw_input_fn=gw_input_fn, discard_local_changes=opts.discard_local_changes,

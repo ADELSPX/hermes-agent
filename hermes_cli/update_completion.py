@@ -258,6 +258,11 @@ def _finish(request: dict, result_path: Path) -> int:
     _resume_receipt(request["receipt"])
     accept_worker_receipt(request.get("pm_receipt"), request["receipt"]["update_id"])
     update_receipt.record_stage("deps", "success")  # only a completed PM preparation reaches --prepared
+    # Best-effort: this interpreter runs from the pulled tree, which on a partial or forked
+    # checkout can still carry the previous generation's update_receipt (#132089). A missing
+    # diagnostic helper must never fail a completion that has already done its work.
+    if hasattr(update_receipt, "record_current_step"):
+        update_receipt.record_current_step("completion")
     code, reason = 0, "source update completion"
     try:
         _complete_selected(request)
