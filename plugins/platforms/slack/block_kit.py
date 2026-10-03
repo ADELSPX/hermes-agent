@@ -85,6 +85,12 @@ _SLACK_LINK_RE = re.compile(
 _BOLD_RE = re.compile(r"(?:\*\*|__)(.+?)(?:\*\*|__)")
 _ITALIC_RE = re.compile(r"(?<![\*_])(?:\*|_)(?![\*_\s])(.+?)(?<![\*_\s])(?:\*|_)(?![\*_])")
 _STRIKE_RE = re.compile(r"~~(.+?)~~")
+# rich_text ``text`` elements are literal: a ``:tada:`` shortcode that mrkdwn would render
+# stays as colons unless emitted as an ``emoji`` element. Needs a letter and a non-word
+# boundary on both sides so ``10:30:45`` and ``pkg:mod:fn`` are left alone.
+_EMOJI_SHORTCODE_RE = re.compile(
+    r"(?<![\w:]):((?:[a-z0-9_+-]*[a-z][a-z0-9_+-]*|[+-]1)(?:::skin-tone-[2-6])?):(?![\w:])")
+_EMOJI_PLACEHOLDER_RE = re.compile(r"\x00E(\d+)\x00")
 
 
 def _inline_elements(text: str) -> List[Dict[str, Any]]:
@@ -93,13 +99,40 @@ def _inline_elements(text: str) -> List[Dict[str, Any]]:
     Unmatched markup is emitted verbatim as plain text, so this never loses characters."""
     elements: List[Dict[str, Any]] = []
 
-    def emit_text(s: str, style: Optional[Dict[str, bool]] = None) -> None:
+    # Shortcodes are stashed behind placeholders before any other pass: the italic regex
+    # would otherwise claim ``_check_`` inside ``:white_check_mark:``. Code spans and
+    # link text/url get the literal back; everything else emits an ``emoji`` element.
+    emoji_names: List[str] = []
+
+    def _stash_emoji(m: "re.Match[str]") -> str:
+        emoji_names.append(m.group(1))
+        return f"\x00E{len(emoji_names) - 1}\x00"
+
+    text = _EMOJI_SHORTCODE_RE.sub(_stash_emoji, text)
+
+    def _literal(s: str) -> str:
+        return _EMOJI_PLACEHOLDER_RE.sub(lambda m: f":{emoji_names[int(m.group(1))]}:", s)
+
+    def _emit_literal(s: str, style: Optional[Dict[str, bool]]) -> None:
         if not s:
             return
         el: Dict[str, Any] = {"type": "text", "text": s}
         if style:
             el["style"] = style
         elements.append(el)
+
+    def emit_text(s: str, style: Optional[Dict[str, bool]] = None) -> None:
+        if not s:
+            return
+        if style and style.get("code"):
+            _emit_literal(_literal(s), style)
+            return
+        pos = 0
+        for m in _EMOJI_PLACEHOLDER_RE.finditer(s):
+            _emit_literal(s[pos : m.start()], style)
+            elements.append({"type": "emoji", "name": emoji_names[int(m.group(1))]})
+            pos = m.end()
+        _emit_literal(s[pos:], style)
 
     # Tokenize by the highest-priority markers first using a single scan.
     # We recursively split on code, then links, then emphasis to keep spans
@@ -113,7 +146,7 @@ def _inline_elements(text: str) -> List[Dict[str, Any]]:
             pos = m.end()
         _walk_links(s[pos:], style)
     def _emit_link(url: str, text: str, style: Dict[str, bool]) -> None:
-        link_el: Dict[str, Any] = {"type": "link", "url": url, "text": text}
+        link_el: Dict[str, Any] = {"type": "link", "url": _literal(url), "text": _literal(text)}
         if style:
             link_el["style"] = dict(style)
         elements.append(link_el)
@@ -151,7 +184,7 @@ def _inline_elements(text: str) -> List[Dict[str, Any]]:
                 return
         emit_text(s, dict(style) if style else None)
     walk(text, {})
-    return elements or [{"type": "text", "text": text}]
+    return elements or [{"type": "text", "text": _literal(text)}]
 
 
 # ----------------------------------------------------------------------------

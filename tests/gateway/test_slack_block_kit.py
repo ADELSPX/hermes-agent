@@ -66,6 +66,18 @@ class TestInlineFormatting:
         assert links == [("https://e.com/1", "[Fix] Harden tokens"), ("https://e.com/2", "[16]")]
         assert not any("](" in (e.get("text") or "") for e in els)
 
+    def test_emoji_shortcodes_become_emoji_elements(self):
+        """rich_text text is literal, so ``:name:`` must be an ``emoji`` element; code spans, link
+        text/url and colon-separated prose (times, module paths) stay as written."""
+        blocks = render_blocks(
+            "- Done :white_check_mark: **bold :tada:** `:tada:` at 10:30:45 via pkg:mod:fn [:x: y](https://e.com/:x:/z)"
+        )
+        els = [b for b in blocks if b["type"] == "rich_text"][0]["elements"][0]["elements"][0]["elements"]
+        assert [e["name"] for e in els if e["type"] == "emoji"] == ["white_check_mark", "tada"]
+        assert {"type": "text", "text": ":tada:", "style": {"code": True}} in els
+        assert {"type": "link", "url": "https://e.com/:x:/z", "text": ":x: y"} in els
+        assert any("10:30:45 via pkg:mod:fn" in (e.get("text") or "") for e in els)
+
     def test_slack_mentions_in_bullet_are_not_links(self):
         blocks = render_blocks("- ping <@U123> in <#C456>")
         assert blocks is not None
