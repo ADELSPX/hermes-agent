@@ -758,7 +758,7 @@ def bind_child_to_update_tree(proc: subprocess.Popen) -> None:
     if not job:
         raise ctypes.WinError(ctypes.get_last_error())
     limits = _Extended()
-    limits.BasicLimitInformation.LimitFlags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+    limits.BasicLimitInformation.LimitFlags = 0x2000 | 0x800  # KILL_ON_JOB_CLOSE | BREAKAWAY_OK (probe)
     if not kernel32.SetInformationJobObject(job, 9, ctypes.byref(limits), ctypes.sizeof(limits)) \
             or not kernel32.AssignProcessToJobObject(job, int(proc._handle)):
         raise ctypes.WinError(ctypes.get_last_error())
