@@ -245,6 +245,45 @@ def _is_ancestor_pid(pid: int) -> bool:
         return False
 
 
+_RUNTIME_HOST_COMMANDS = (("gateway", "run"), ("serve",), ("dashboard",))
+
+
+def _is_runtime_host(argv: list[str]) -> bool:
+    """A long-lived Hermes host (gateway/serve/dashboard) — never a stage of an update."""
+    for index, token in enumerate(argv):
+        name = os.path.basename(token).lower()
+        if name in ("hermes_cli.main", "hermes", "hermes.exe") or name.endswith("hermes_cli/main.py"):
+            rest = [t for t in argv[index + 1:] if not t.startswith("-")]
+            return any(tuple(rest[:len(cmd)]) == cmd for cmd in _RUNTIME_HOST_COMMANDS)
+    return False
+
+
+def _runtime_host_below(holder_pid: int) -> bool:
+    """True when a Hermes gateway/serve/dashboard sits between us and *holder_pid* (or anywhere
+    above us when the holder is not reached).
+
+    Such a host is relaunched BY an update and outlives its stages; a ``hermes update`` its agent
+    or ``/update`` starts is an independent update that must not run under the first one's claim
+    (cli §7 V9). Unreadable command lines count as not-a-host (the legacy adoption stands).
+    """
+    try:
+        import psutil
+    except ImportError:
+        return False
+    try:
+        proc = psutil.Process().parent()
+        for _ in range(_MAX_ANCESTRY_DEPTH):
+            if proc is None or proc.pid == holder_pid:
+                return False
+            with suppress(psutil.Error):
+                if _is_runtime_host(proc.cmdline()):
+                    return True
+            proc = proc.parent()
+    except psutil.Error:
+        return False
+    return False
+
+
 @dataclass(frozen=True)
 class UpdateHolder:
     """A confirmed-live update currently holding the lock."""
@@ -324,7 +363,7 @@ class UpdateLock:
         # It is a new attempt, so it is claimed fresh like a dead holder's. Keeping the old
         # started_at would let the ceiling expire mid-run and admit a second updater.
         if existing is not None and existing.pid != os.getpid():
-            if existing.pid == _handoff_pid() or _is_ancestor_pid(existing.pid):
+            if (existing.pid == _handoff_pid() or _is_ancestor_pid(existing.pid)) and not _runtime_host_below(existing.pid):
                 return True
             self.holder = existing
             return False
