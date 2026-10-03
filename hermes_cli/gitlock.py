@@ -627,13 +627,20 @@ def migrate_treeless_checkout(repo_root: Path, branch: "str | None" = None, **ru
         _git_config(repo_root, "remote.origin.partialclonefilter", "blob:none", **run_kwargs).check_returncode()
         logger.info("Migrating treeless checkout %s to a blobless partial clone (one-time tree refetch)",
                     repo_root)
-        result = bounded_probe_run(
-            ["git", "fetch", "--refetch", "--quiet", "--no-tags", "origin",
-             f"+refs/heads/{branch}:refs/remotes/origin/{branch}"],
-            timeout=TREELESS_REFETCH_TIMEOUT_SECONDS, cwd=str(repo_root),
-            env={**noninteractive_git_env(), **NO_LAZY_FETCH_ENV},
-        )
-        if result is not None and result.returncode == 0:
+        # Plain subprocess, no pipes: this runs in the update's dependency-free bootstrap
+        # interpreter, where bounded_probe_run's psutil-backed spawn is unavailable, and
+        # without captured pipes a lingering helper can't wedge the timeout cleanup.
+        try:
+            code = subprocess.run(
+                ["git", "fetch", "--refetch", "--quiet", "--no-tags", "origin",
+                 f"+refs/heads/{branch}:refs/remotes/origin/{branch}"],
+                cwd=str(repo_root), env={**noninteractive_git_env(), **NO_LAZY_FETCH_ENV},
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                timeout=TREELESS_REFETCH_TIMEOUT_SECONDS, creationflags=windows_hide_flags(),
+            ).returncode
+        except (OSError, subprocess.TimeoutExpired):
+            code = None
+        if code == 0:
             _git_config(repo_root, "--unset", _TREELESS_MIGRATION_PENDING_KEY, **run_kwargs)
         else:
             logger.warning("Treeless→blobless refetch in %s did not finish; the next update "

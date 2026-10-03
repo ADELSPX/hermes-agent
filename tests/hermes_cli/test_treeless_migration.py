@@ -11,6 +11,7 @@ re-arm or silently change one).
 
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -99,6 +100,24 @@ def test_a_failed_refetch_is_retried_by_the_next_run(upstream, tmp_path):
 
     _git("remote", "set-url", "origin", real_url, cwd=checkout)
     assert migrate_treeless_checkout(checkout, "main") is True
+    assert _path_probe_succeeds_locally(checkout)
+    assert migrate_treeless_checkout(checkout, "main") is False
+
+
+def test_the_update_bootstrap_interpreter_completes_the_refetch(upstream, tmp_path):
+    # Both update hand-offs (update_completion._prepare, _update_takeover.prepare) call this
+    # from an isolated interpreter with no site-packages, before the dependency sync. A
+    # refetch that needs a third-party module there never runs: the filter flips but the
+    # trees never arrive, which is the per-tree storm in a new shape.
+    checkout = _clone(upstream, tmp_path, "treeless", "--filter=tree:0")
+    root = Path(__file__).resolve().parents[2]
+    script = ("import sys; sys.path.insert(0, sys.argv[1]); from pathlib import Path; "
+              "from hermes_cli.gitlock import migrate_treeless_checkout; "
+              "print(migrate_treeless_checkout(Path(sys.argv[2])))")
+    result = subprocess.run([sys.executable, "-I", "-S", "-c", script, str(root), str(checkout)],
+                            env=_ENV, capture_output=True, text=True, encoding="utf-8", timeout=120)
+    assert result.stdout.strip() == "True", result.stderr
+    assert _filter_of(checkout) == "blob:none"
     assert _path_probe_succeeds_locally(checkout)
     assert migrate_treeless_checkout(checkout, "main") is False
 
