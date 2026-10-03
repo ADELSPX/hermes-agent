@@ -58,6 +58,14 @@ class TestInlineFormatting:
         assert not any("<https://" in (e.get("text") or "") for e in els)
         assert any(e.get("style", {}).get("code") for e in els)
 
+    def test_bracketed_markdown_label_becomes_link_element(self):
+        """rich_text link text keeps a label's balanced/escaped brackets instead of leaving raw markdown."""
+        blocks = render_blocks("- [[Fix] Harden tokens](https://e.com/1) and [\\[16\\]](https://e.com/2)")
+        els = [b for b in blocks if b["type"] == "rich_text"][0]["elements"][0]["elements"][0]["elements"]
+        links = [(e["url"], e["text"]) for e in els if e.get("type") == "link"]
+        assert links == [("https://e.com/1", "[Fix] Harden tokens"), ("https://e.com/2", "[16]")]
+        assert not any("](" in (e.get("text") or "") for e in els)
+
     def test_slack_mentions_in_bullet_are_not_links(self):
         blocks = render_blocks("- ping <@U123> in <#C456>")
         assert blocks is not None

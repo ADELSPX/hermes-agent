@@ -31,6 +31,8 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
+from gateway.platforms.helpers import MD_LINK_LABEL, unescape_md_link_label
+
 # Slack Block Kit hard limits (https://docs.slack.dev/reference/block-kit/blocks)
 MAX_BLOCKS = 50
 MAX_SECTION_TEXT = 3000
@@ -74,7 +76,7 @@ def _indent_level(spaces: str) -> int:
 
 # Order matters: code first (opaque), then links, then emphasis.
 _INLINE_CODE_RE = re.compile(r"`([^`]+)`")
-_LINK_RE = re.compile(r"(?<!!)\[([^\]]+)\]\(([^()\s]+(?:\([^()]*\)[^()\s]*)*)\)")
+_LINK_RE = re.compile(r"(?<!!)\[(" + MD_LINK_LABEL + r")\]\(([^()\s]+(?:\([^()]*\)[^()\s]*)*)\)")
 # Slack mrkdwn autolink: <scheme:target> or <scheme:target|label>.
 # Mentions (<@U…>, <#C…>, <!here>) have no scheme: and stay as text.
 _SLACK_LINK_RE = re.compile(
@@ -120,7 +122,7 @@ def _inline_elements(text: str) -> List[Dict[str, Any]]:
         pos = 0
         for m in _LINK_RE.finditer(s):
             _walk_slack_links(s[pos : m.start()], style)
-            _emit_link(m.group(2), m.group(1), style)
+            _emit_link(m.group(2), unescape_md_link_label(m.group(1)), style)
             pos = m.end()
         _walk_slack_links(s[pos:], style)
 
