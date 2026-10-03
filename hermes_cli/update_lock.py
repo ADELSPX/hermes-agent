@@ -844,13 +844,16 @@ def _bind_to_kill_on_close_job(proc: subprocess.Popen) -> None:
     _JOBS.append(job)  # never closed: the handle closes when this process dies, killing the tree
 
 
+def holds_checkout_lock(install_root: Path | str | None = None) -> bool:
+    """True when this process holds (or joined) the checkout lock: it IS the running update."""
+    return _HELD is not None and os.path.realpath(_HELD["path"]) == os.path.realpath(checkout_lock_path(install_root))
+
+
 def update_in_progress(install_root: Path | str | None = None) -> bool:
     """True while an update owns this install: a LIVE marker or a held checkout lock."""
-    if read_live_update() is not None:
+    if read_live_update() is not None or holds_checkout_lock(install_root):
         return True
     path = checkout_lock_path(install_root)
-    if _HELD is not None and _HELD["path"] == str(path):
-        return True
     try:
         fd = os.open(path, os.O_RDONLY | getattr(os, "O_BINARY", 0))
     except OSError:
