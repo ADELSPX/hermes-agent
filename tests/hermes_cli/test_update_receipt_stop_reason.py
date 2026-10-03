@@ -16,6 +16,7 @@ The success path must keep its existing reason verbatim — a receipt that claim
 a diagnostic suffix on it is a different bug, not a stricter version of this one.
 """
 
+import inspect
 import json
 from types import SimpleNamespace
 
@@ -165,10 +166,8 @@ class TestDebrisSweepCoversTheSnapshotWindow:
 
     def test_the_apply_path_no_longer_sweeps_a_second_time(self):
         """One sweep at the start is the contract; a duplicate would print the same line twice."""
-        source = (update_cmd.__file__ or "")
-        with open(source, encoding="utf-8") as handle:
-            text = handle.read()
-        assert text.count("clear_stale_git_locks(_m().PROJECT_ROOT)") == 0
-        assert text.count("clear_stale_tmp_packs(_m().PROJECT_ROOT)") == 0
-        # The shared helper is still what both paths call.
-        assert "clear_git_debris(_m().PROJECT_ROOT)" in text
+        source = inspect.getsource(update_cmd._cmd_update_impl)
+        assert "clear_stale_git_locks" not in source
+        assert "clear_stale_tmp_packs" not in source
+        # The shared helper is what both the start sweep and --check go through.
+        assert source.count("clear_git_debris(_m().PROJECT_ROOT)") == 1

@@ -277,10 +277,10 @@ def exit_context() -> str:
     step = str(current.data.get("current_step") or "").strip()
     failure = current.data.get("last_failure") or {}
     detail = str(failure.get("detail") or "").strip()
-    if detail:
-        named = f"{failure.get('name')}: {detail}" if failure.get("name") else detail
-        return f" during {named}" if not step else f" during {step} ({named})"
-    return f" during {step}" if step else ""
+    if not detail:
+        return f" during {step}" if step else ""
+    named = f"{failure['name']}: {detail}"
+    return f" during {step} ({named})" if step else f" during {named}"
 
 
 def record_skip(name: str, reason: str) -> None:
