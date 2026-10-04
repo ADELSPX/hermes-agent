@@ -49,8 +49,9 @@ jobs:
       - name: Run Windows install + update E2E
         shell: bash
         run: |
-          scripts/run_tests.sh tests/e2e/core/windows_update/ -- \
-            -m "platforms and integration" -v --tb=short -rA
+          # PROOF BRANCH ONLY (round 9 LOCK, R8 m1/m2): the custody cells, not the install journey.
+          scripts/run_tests.sh tests/hermes_cli/test_update_lock_windows_live.py -- \
+            -m "platforms" -v --tb=short -rA
         env:
           HERMES_E2E_WINDOWS_INSTALL: '1'
           # Machine work dirs (serve.git, transcripts) stay short under runner.temp. The fake
