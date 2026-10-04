@@ -18,7 +18,7 @@ from hermes_cli._subprocess_compat import (
     noninteractive_git_env,
     windows_hide_flags,
 )
-from hermes_cli.update_custody import git_argv, run_git
+from hermes_cli.update_custody import git_argv, run_git, spawn_kwargs
 
 logger = logging.getLogger(__name__)
 
@@ -629,7 +629,8 @@ def consolidate_lazy_fetch_packs(repo_root: Path, *,
     write a commit-graph (see ``_TREE0_MAINTENANCE_OFF``): over a Bloom-carrying graph that is a
     lazy fetch per unseen commit, so the same call that folds 100 packs would leave 30 new ones.
     Runs under ``bounded_probe_run`` because ``subprocess.run(timeout=)`` kills only ``git gc``
-    and leaves its ``pack-objects`` child running. ``on_fold_start(pack_count)`` fires just before
+    and leaves its ``pack-objects`` child running; it gets ``run_git``'s custody through
+    ``update_custody.spawn_kwargs``. ``on_fold_start(pack_count)`` fires just before
     a fold gc will actually do (pack count past the limit), so the caller can say why the update
     went quiet. Best-effort like every helper here: never raises, returns 0 for a non-partial
     checkout or when nothing folded, and ``None`` when the fold hit its time limit.
@@ -642,12 +643,14 @@ def consolidate_lazy_fetch_packs(repo_root: Path, *,
         limit = _gc_auto_pack_limit(repo_root)
         if on_fold_start is not None and 0 < limit < before:
             on_fold_start(before)
-        # Object store only (no worktree/index/refs): no lock fd. Its own runner bounds and
-        # tree-kills it (Windows: a kill-on-close job of ours); git_argv adds the no-detach config.
+        # gc packs refs and repacks the object store: a local mutator in custody (spawn_kwargs:
+        # POSIX, the lock fd, which its repack/pack-objects children inherit, so a killed owner
+        # leaves the checkout locked until they exit). Its own runner bounds and tree-kills it on
+        # timeout (Windows: a kill-on-close job of ours); git_argv adds the no-detach config.
+        argv = git_argv(["git"], ["-c", "gc.writeCommitGraph=false", "gc", "--auto"])
         if bounded_probe_run(
-            git_argv(["git"], ["-c", "gc.writeCommitGraph=false", "gc", "--auto"]),
-            timeout=LAZY_FETCH_GC_TIMEOUT_SECONDS, cwd=str(repo_root),
-            env={**noninteractive_git_env(), **NO_LAZY_FETCH_ENV},
+            argv, timeout=LAZY_FETCH_GC_TIMEOUT_SECONDS, cwd=str(repo_root),
+            env={**noninteractive_git_env(), **NO_LAZY_FETCH_ENV}, popen_kwargs=spawn_kwargs(argv[1:]),
         ) is None:
             logger.warning("Folding %d lazy-fetch pack(s) in %s timed out after %ds",
                            before, repo_root, LAZY_FETCH_GC_TIMEOUT_SECONDS)
