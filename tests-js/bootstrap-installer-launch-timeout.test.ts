@@ -79,9 +79,8 @@ describe('launchHermesDesktop', () => {
 
   it('does not blow up as an unhandled rejection when the invoke settles after the backstop', async () => {
     // The losing arm: the backstop fires first, and the (merely slow) invoke
-    // settles afterwards. A stray rejection would take the webview down as
-    // an unhandled rejection — the handler swallow in the store exists
-    // exactly for this shape.
+    // settles afterwards. Promise.race already handles that late rejection;
+    // an unhandled one would take the webview down.
     let settle: ((value: unknown) => void) | undefined
     invoke.mockReturnValue(
       new Promise((_resolve, reject) => {
@@ -96,7 +95,7 @@ describe('launchHermesDesktop', () => {
     )
 
     await vi.advanceTimersByTimeAsync(LAUNCH_BACKSTOP_MS)
-    settle?.(new Error('late backend rejection must be swallowed'))
+    settle?.(new Error('late backend rejection'))
 
     await rejection
   })

@@ -223,6 +223,11 @@ pub async fn launch_hermes_desktop(
             exe_path.display()
         )
     })?;
+    // Spawned: the slot stays claimed for the rest of the process. `app.exit(0)`
+    // can return without exiting (update.rs::exit_after_success), and returning
+    // Ok would otherwise drop the guard and let a second click spawn another
+    // Hermes.exe once the frontend backstop re-enables Launch.
+    std::mem::forget(_release);
 
     // Give Windows ~150ms to actually start the new process before we exit.
     tokio::time::sleep(std::time::Duration::from_millis(150)).await;
@@ -293,9 +298,9 @@ pub(crate) fn claim_launch_slot() -> Result<(), String> {
 }
 
 /// Frees the launch slot when a launch fails, so the user can retry Launch
-/// after an error. A SUCCESS never runs this: the process exits first, and
-/// the flag stays claimed forever — which is correct, because a second
-/// launch attempt racing the exit must not spawn another Hermes.exe.
+/// after an error. A successful spawn `mem::forget`s it, so the flag stays
+/// claimed for the life of the process: a second launch attempt racing the
+/// exit (or a wedged `app.exit`) must not spawn another Hermes.exe.
 struct LaunchSlotReleaseOnExit;
 
 impl Drop for LaunchSlotReleaseOnExit {
@@ -339,10 +344,20 @@ pub(crate) fn probe_deadline_error(install_root: &std::path::Path) -> String {
 pub(crate) async fn resolve_desktop_exe_bounded(
     install_root: &std::path::Path,
 ) -> Result<Option<PathBuf>, String> {
+    bounded_exe_probe(install_root, EXE_PROBE_TIMEOUT, resolve_hermes_desktop_exe).await
+}
+
+/// [`resolve_desktop_exe_bounded`] with the probe and deadline as parameters,
+/// so a test can stall the probe past a short deadline and watch it settle.
+pub(crate) async fn bounded_exe_probe(
+    install_root: &std::path::Path,
+    deadline: std::time::Duration,
+    probe: fn(&std::path::Path) -> Option<PathBuf>,
+) -> Result<Option<PathBuf>, String> {
     let probe_root = install_root.to_path_buf();
     match tokio::time::timeout(
-        EXE_PROBE_TIMEOUT,
-        tokio::task::spawn_blocking(move || resolve_hermes_desktop_exe(&probe_root)),
+        deadline,
+        tokio::task::spawn_blocking(move || probe(&probe_root)),
     )
     .await
     {
@@ -1565,13 +1580,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn bounded_probe_deadline_error_names_the_av_shape() {
-        // The stalled-probe arm can't be forced on a healthy filesystem, so
-        // pin the deadline's error contract directly: it must mention both
-        // the timeout and the actionable fallback (`hermes desktop`), because
-        // the frontend renders it verbatim under the Launch button.
+    async fn a_stalled_probe_settles_with_the_deadline_error() {
+        // The probe stands in for an AV-held metadata query: it sleeps far past
+        // the deadline. The invoke must settle with the deadline's message well
+        // before the probe would have returned, which is the whole guarantee
+        // the Launch button relies on. The message must name the timeout and
+        // the terminal fallback, because the frontend renders it verbatim.
+        fn stalled(_: &std::path::Path) -> Option<PathBuf> {
+            std::thread::sleep(std::time::Duration::from_secs(3));
+            None
+        }
         let root = unique_tmp_dir("probe-deadline");
-        let message = probe_deadline_error(&root);
+        let started = Instant::now();
+        let message = bounded_exe_probe(&root, std::time::Duration::from_millis(50), stalled)
+            .await
+            .expect_err("a probe stalled past its deadline must settle Err");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(2),
+            "the deadline, not the probe, must decide when the invoke settles"
+        );
         assert!(
             message.contains("Timed out"),
             "deadline error must say what happened: {message}"

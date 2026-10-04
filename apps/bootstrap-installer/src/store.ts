@@ -370,15 +370,11 @@ export async function launchHermesDesktop(): Promise<void> {
 
   if (!installRoot) {throw new Error('no install root')}
 
-  const launch = invoke('launch_hermes_desktop', { installRoot })
-  // The race's losing arm must never surface as an unhandled rejection: the
-  // invoke can settle AFTER the backstop fires (backend merely slow), and an
-  // unhandled rejection in the webview would take the whole window down.
-  // Attaching a no-op handler here keeps the race's verdict the only one the
-  // UI sees.
-  launch.catch(() => {})
+  // Promise.race subscribes to both arms, so an invoke that rejects after the
+  // backstop has fired is already handled; the race's verdict is the only one
+  // the UI sees.
   await Promise.race([
-    launch,
+    invoke('launch_hermes_desktop', { installRoot }),
     new Promise<never>((_, reject) => {
       setTimeout(() => {
         reject(new Error('The desktop launch request timed out. Please try Launch again.'))
