@@ -242,23 +242,54 @@ describe.skipIf(process.platform === 'win32')('gate over a dead marker (R6)', ()
     assert.equal(await gate(root, home)(), true)
   })
 
-  test('`unsupported` (old checkout) opens the gate WITHOUT deleting; asked once per distinct body', async () => {
+  test('`unsupported` (old checkout) opens the gate WITHOUT deleting, once confirmed one re-probe later (R9-5)', async () => {
     const { root, home } = fakeHelperCheckout('')
     const body = `${await deadPid()}\n${minutesAgo(1)}\n`
     fs.writeFileSync(markerPath(home), body)
     fs.writeFileSync(path.join(home, 'helper-verdict'), 'usage: unknown option --marker-op')
     fs.writeFileSync(path.join(home, 'helper-exit'), '64')
-    const hasLiveMarker = gate(root, home)
+    let clock = Date.now()
+    const hasLiveMarker = gate(root, home, () => clock)
 
-    assert.equal(await hasLiveMarker(), false)
+    assert.equal(await hasLiveMarker(), true, 'one `unsupported` is not yet an older checkout')
+    clock += 4_999
+    assert.equal(await hasLiveMarker(), true, 'inside the re-probe interval: still closed')
+    clock += 1
+    assert.equal(await hasLiveMarker(), false, 'the second `unsupported` 5 s later opens it')
     assert.equal(await hasLiveMarker(), false)
     assert.equal(helperCalls(home).length, 0, 'legacy helper is never invoked')
     assert.equal(fs.readFileSync(markerPath(home), 'utf8'), body, 'dead = not running, and left in place')
+    assert.equal(await gate(root, home, () => clock)(), false, 'a later wait does not pay the delay again')
 
     const next = `${await deadPid()}\n${minutesAgo(1)}\n`
     fs.writeFileSync(markerPath(home), next)
+    assert.equal(await hasLiveMarker(), true, 'a new body is confirmed again')
+    clock += 5_000
     assert.equal(await hasLiveMarker(), false)
     assert.equal(helperCalls(home).length, 0, 'legacy capability absence remains unsupported')
+  })
+
+  test('a first `unsupported` while git rewrites the script never opens a body this process never saw block (R9-5)', async () => {
+    const { root, home } = fakeHelperCheckout()
+    const body = `${await deadPid()}\n${minutesAgo(1)}\nct:1.000\n`
+    fs.writeFileSync(markerPath(home), body)
+    fs.writeFileSync(path.join(home, 'helper-verdict'), 'held')
+    const script = path.join(root, 'scripts', 'desktop-update', 'posix.sh')
+    const text = fs.readFileSync(script, 'utf8')
+    fs.rmSync(script) // a fresh Desktop's first ask lands in git's unlink/rewrite window
+    let clock = Date.now()
+    const states: HeldState[] = []
+    const probe = gate(root, home, () => clock, { onHeld: s => states.push(s) })
+
+    assert.equal(await probe(), true, 'a first `unsupported` keeps the gate closed')
+    requestHoldRecheck()
+    assert.equal(await probe(), true, 'a Retry does not count as the confirming answer')
+    fs.writeFileSync(script, text)
+    clock += 5_000
+    assert.equal(await probe(), true, 'the script is back and the holder is alive: held')
+    assert.deepEqual([states.at(-1)!.verdict, states.at(-1)!.blocking], ['held', true])
+    assert.equal(helperCalls(home).length, 1)
+    assert.equal(fs.readFileSync(markerPath(home), 'utf8'), body, 'the marker is never touched')
   })
 
   test('a live owner never reaches the helper; an absent marker neither', async () => {

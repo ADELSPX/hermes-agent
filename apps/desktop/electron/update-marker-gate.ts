@@ -14,7 +14,11 @@
  *   (dead = not running, as before minus the deletion) — unless this process
  *   already saw the same body block: then the script is only missing or
  *   unreadable for a moment (git rewriting it mid-update), so the answer counts
- *   as `error` and is re-asked (review R8 M5).
+ *   as `error` and is re-asked (review R8 M5). A body never seen blocking opens
+ *   only on a second `unsupported` at least `reprobeMs` after the first: one
+ *   answer can land in git's unlink/rewrite window of the script (review R9-5).
+ *   The gate stays closed in between, so a really old checkout costs one
+ *   re-probe interval per body per process.
  *
  * The helper is asked once per distinct dead marker body per wait; a `held` /
  * `busy` / `error` / `live` answer is re-asked every `reprobeMs` (5 s), or on
@@ -94,6 +98,11 @@ function heldSince(key: string, at: number): number {
   return firstHeldAt.get(key)!
 }
 
+// Bodies whose `unsupported` was confirmed by a second answer one re-probe
+// interval later (R9-5), process-wide so a later gate wait (a pool backend)
+// does not pay the confirmation delay again.
+const confirmedUnsupported = new Set<string>()
+
 // Marker bodies the user explicitly chose to start over (R8 D3), process-wide
 // so a pool backend wait honours the same decision. A different body (a new
 // update, a new owner) blocks again.
@@ -159,6 +168,7 @@ export function requestHoldRecheck(): void {
 /** Test seam: forget process-wide hold state. */
 export function resetHoldStateForTests(): void {
   firstHeldAt.clear()
+  confirmedUnsupported.clear()
   startAnywayHolds.clear()
   recheckGeneration = 0
 }
@@ -177,7 +187,14 @@ export function liveMarkerProbe({
 }: LiveMarkerProbeOptions): () => Promise<boolean> {
   const asked = new Map<
     string,
-    { verdict: MarkerHelperVerdict; at: number; generation: number; overrideLogged?: boolean }
+    {
+      verdict: MarkerHelperVerdict
+      at: number
+      generation: number
+      overrideLogged?: boolean
+      // One `unsupported` so far for a body never seen blocking (R9-5).
+      unconfirmed?: boolean
+    }
   >()
 
   return async () => {
@@ -207,6 +224,7 @@ export function liveMarkerProbe({
 
     const due =
       !previous ||
+      (previous.unconfirmed && now() - previous.at >= reprobeMs) ||
       (STILL_RUNNING.has(previous.verdict.kind) &&
         (now() - previous.at >= reprobeMs || previous.generation !== recheckGeneration))
 
@@ -223,14 +241,40 @@ export function liveMarkerProbe({
         verdict = { kind: 'error' }
       }
 
-      if (!previous || STILL_RUNNING.has(previous.verdict.kind) !== STILL_RUNNING.has(verdict.kind)) {
+      // A first `unsupported` for a body never seen blocking may be git
+      // rewriting the script: keep the gate closed and ask once more after a
+      // re-probe interval; only a second `unsupported` opens it (R9-5).
+      const unconfirmed = verdict.kind === 'unsupported' && !previous?.unconfirmed && !confirmedUnsupported.has(holdId)
+
+      if (verdict.kind === 'unsupported' && !unconfirmed) {
+        if (confirmedUnsupported.size >= 16) {
+          confirmedUnsupported.clear()
+        }
+
+        confirmedUnsupported.add(holdId)
+      }
+
+      if (unconfirmed) {
+        log?.(
+          `[updates] dead update marker: script helper says unsupported; asking again in ${Math.round(reprobeMs / 1000)} s ` +
+            'before treating the checkout as an older one'
+        )
+      } else if (
+        !previous ||
+        previous.unconfirmed ||
+        STILL_RUNNING.has(previous.verdict.kind) !== STILL_RUNNING.has(verdict.kind)
+      ) {
         log?.(
           `[updates] dead update marker: script helper says ${verdict.kind}${'pid' in verdict ? ` ${verdict.pid}` : ''}`
         )
       }
 
-      entry = { ...previous, verdict, at: now(), generation }
+      entry = { ...previous, verdict, at: now(), generation, unconfirmed }
       asked.set(holdId, entry)
+    }
+
+    if (entry!.unconfirmed) {
+      return true
     }
 
     const { verdict } = entry!
