@@ -57,13 +57,24 @@ confidence, each line pointing at the command and file that produced it.
 
 - Python 3.10+ and [`uv`](https://docs.astral.sh/uv/) on `PATH`. Every script
   carries an inline PEP 723 dependency block, so `uv run scripts/<x>.py`
-  resolves its own packages on first use; nothing is installed into the Hermes
-  environment. The core (EXIF, OCR via `rapidocr-onnxruntime`, lookup tables,
-  board, sun, DEM, Overpass, gazetteer) is light; `match.py` and `sat_scan.py`
+  resolves its own packages on first use (the first run adds ~30 s of
+  dependency install); nothing is installed into the Hermes environment. The
+  core (EXIF, OCR via `rapidocr-onnxruntime`, lookup tables, board, sun, DEM,
+  Overpass, gazetteer) runs in seconds; `match.py` and `sat_scan.py`
   pull `torch` + `transformers` (several GB, CPU works) and `revimg.py` needs
   Playwright with a Chromium download. Skip those steps when the machine
   cannot afford them — the skill tells you to mark them "not run", never "not
   found".
+- Overpass-backed steps (`osm.py`, `gazetteer.py`, `board.py children` /
+  `urban`) take one to four minutes per query even for a county-sized bbox:
+  run them with a generous timeout (10 min) or in the background, and use
+  native-script place names (`臺灣`, `江苏省`) — English names often do not
+  resolve against OSM relations.
+- Lookup tables are split by scope: PRC plates, landline area codes and the
+  administrative tree are local JSON; calling codes, driving side and
+  dependent territories are global. Open `intake/ocr.png` before registering
+  OCR text as `read` — low-confidence tile-pass hits are frequently texture
+  false positives, which is why the report labels them hypotheses.
 - The upstream instructions reference `${CLAUDE_SKILL_DIR}` for the skill's
   own directory (the variable name is the upstream scripts' contract). Hermes
   does not set it: run
@@ -85,8 +96,8 @@ confidence, each line pointing at the command and file that produced it.
   unofficial consumer endpoints, not documented APIs — they can break or
   rate-limit without notice, and the scripts accept `--proxy` / `GEO_PROXY`
   for regions where they are blocked. The install scanner rates the tree
-  `caution` (child processes inherit `os.environ`, proxy variables are set
-  for the ML scripts); nothing reads credentials.
+  `caution` (child processes inherit the parent environment, proxy variables
+  are set for the ML scripts); nothing reads credentials.
 
 ## Trust and consent
 
