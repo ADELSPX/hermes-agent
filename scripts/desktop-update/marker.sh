@@ -10,7 +10,7 @@
 #     <pid>\n<started_at>\nct:<creation time>\n[delegate:<pid> ct:<ct>\n][run:<id>\n]
 #
 # Each line drops one leading BOM (line 1), one trailing CR and surrounding
-# spaces/tabs. Line 1 (a u32 pid) and line 2 (digits that fit u64) are required, else
+# spaces/tabs. Line 1 (a u32 pid) and line 2 (an integer) are required, else
 # the marker is MALFORMED. A line 3 that is not `ct:<n>` makes it v1. Lines 4+
 # are tagged: the first well-formed `delegate:<pid> ct:<n>` and the first
 # well-formed `run:<id>` count; anything else is ignored.
@@ -31,7 +31,6 @@ MARKER_CT_RE='^ct:([0-9]+(\.[0-9]+)?)$'
 MARKER_DELEGATE_RE='^delegate:([0-9]+) ct:([0-9]+(\.[0-9]+)?)$'
 MARKER_RUN_RE='^run:([A-Za-z0-9._-]{1,128})$'
 MARKER_LOCK_TOOL="${MARKER_LOCK_TOOL:-}"
-MARKER_LOCK_TOOL_FORCED="$MARKER_LOCK_TOOL"  # tests pin a tool; the checkout probe honours it
 MY_PID="${MY_PID:-$$}"
 MY_CT="${MY_CT:-}"
 
@@ -120,10 +119,10 @@ marker_line() { # raw line -> LINE without one trailing CR and surrounding space
   LINE="${LINE%"${LINE##*[![:blank:]]}"}"
 }
 
-M_PID="" M_STARTED="" M_STARTED_DIGITS="" M_CT="" M_DPID="" M_DCT="" M_RUN="" M_RUNS=""
+M_PID="" M_STARTED="" M_CT="" M_DPID="" M_DCT="" M_RUN="" M_RUNS=""
 marker_parse() { # marker text -> M_* fields. M_PID="" = MALFORMED.
   local raw n=0 l1="" l2="" dpid dct
-  M_PID="" M_STARTED="" M_STARTED_DIGITS="" M_CT="" M_DPID="" M_DCT="" M_RUN="" M_RUNS=""
+  M_PID="" M_STARTED="" M_CT="" M_DPID="" M_DCT="" M_RUN="" M_RUNS=""
   while IFS= read -r raw || [ -n "$raw" ]; do
     n=$((n + 1))
     [ "$n" -ne 1 ] || raw="${raw#$'\357\273\277'}"
@@ -149,17 +148,6 @@ EOF_MARKER
   marker_u32 "$l1" || return 0
   M_STARTED="${l2#"${l2%%[!0]*}"}"
   M_STARTED="${M_STARTED:-0}"
-  M_STARTED_DIGITS="$M_STARTED"  # exact value (no leading zeros) for rewrites; M_STARTED is clamped
-  # line 2 fits u64 (any digit count), compared as two 10-digit halves -- never in
-  # shell arithmetic, which is signed 64-bit
-  if [ "${#M_STARTED}" -gt 20 ]; then
-    M_STARTED="" M_STARTED_DIGITS=""; return 0
-  elif [ "${#M_STARTED}" -eq 20 ]; then
-    local hi=$(( 10#${M_STARTED:0:10} )) lo=$(( 10#${M_STARTED:10} ))
-    if [ "$hi" -gt 1844674407 ] || { [ "$hi" -eq 1844674407 ] && [ "$lo" -gt 3709551615 ]; }; then
-      M_STARTED="" M_STARTED_DIGITS=""; return 0
-    fi
-  fi
   [ "${#M_STARTED}" -le 18 ] || M_STARTED=999999999999999999  # far future: "young"
   M_PID="$U32"
 }
@@ -284,47 +272,23 @@ marker_ancestor() { # pid -> 0 iff it is one of our ancestors
   return 1
 }
 
-# The launcher-lineage rule -- ONE rule, the same in marker-claim.ps1
-# (Test-MarkerLauncherRule); the shared table is
-# tests/scripts/desktop_update/lineage_rule_cases.py. An OLD Desktop's bridge
-# "<launcher pid>\n<started_at>\n" (v1: no ct, no delegate) names the launcher
-# it spawned (be3fd671d70 checkout.ts) instead of itself. It is adopted iff it
-# does not name the Desktop and
-#   the named pid is alive: it is our parent AND (its parent is the Desktop OR
-#                           line 2 == HERMES_UPDATE_STARTED_AT -- a Desktop
-#                           that already quit leaves its launcher re-parented);
-#   the named pid is gone:  line 2 == HERMES_UPDATE_STARTED_AT (the old Desktop
-#                           hands the launcher the same value it writes).
-# 1/0 facts: v1 names_desktop named_alive named_is_our_parent
-# named_parent_is_desktop env_started_matches -> 0 adopt
-marker_launcher_rule() {
-  [ "$1" = 1 ] && [ "$2" = 0 ] || return 1
-  if [ "$3" = 1 ]; then
-    [ "$4" = 1 ] && { [ "$5" = 1 ] || [ "$6" = 1 ]; }
-  else
-    [ "$6" = 1 ]
-  fi
-}
-
-marker_env_started_matches() { # line-2 digits -> 0 iff HERMES_UPDATE_STARTED_AT is plain ASCII
-  # digits (no sign, no spaces) of the same value
-  local env="${HERMES_UPDATE_STARTED_AT:-}" want="${1#"${1%%[!0]*}"}"
-  case "$env" in ''|*[!0-9]*) return 1 ;; esac
-  env="${env#"${env%%[!0]*}"}"
-  [ "${env:-0}" = "${want:-0}" ]
-}
-
-marker_old_desktop_bridge() { # the parsed marker is an OLD Desktop's launcher bridge (rule above)
-  local x="$M_PID" v1=0 names_desktop=0 alive=0 is_parent=0 parent_desktop=0 env_match=0
-  [ -n "$M_CT" ] || [ -n "$M_DPID" ] || v1=1
-  [ "$x" != "$DESKTOP_PID" ] || names_desktop=1
-  marker_env_started_matches "$M_STARTED_DIGITS" && env_match=1
+marker_old_desktop_bridge() { # an OLD Desktop's bridge: "<launcher pid>\n<started_at>\n"
+  # written over the marker right after it spawned the launcher that started us
+  # (be3fd671d70 checkout.ts). Proven by lineage, never assumed: the named pid
+  # is our parent and the Desktop's child, or -- once it has exited -- the
+  # marker carries the hand-off's own HERMES_UPDATE_STARTED_AT (the old
+  # Desktop writes the same value to both; a Desktop that already quit leaves
+  # its launcher re-parented, so either proof suffices while it is alive).
+  local x="$M_PID" same_start=1
+  [ "$x" != "$DESKTOP_PID" ] && [ -z "$M_CT" ] && [ -z "$M_DPID" ] || return 1
+  [ -n "${HERMES_UPDATE_STARTED_AT:-}" ] \
+    && [ "$M_STARTED" = "${HERMES_UPDATE_STARTED_AT#"${HERMES_UPDATE_STARTED_AT%%[!0]*}"}" ] && same_start=0
   if pid_alive "$x"; then
-    alive=1
-    [ "$x" != "$(pid_parent "$MY_PID")" ] || is_parent=1
-    [ "$(pid_parent "$x")" != "$DESKTOP_PID" ] || parent_desktop=1
+    [ "$x" = "$(pid_parent "$MY_PID")" ] || return 1
+    [ "$(pid_parent "$x")" = "$DESKTOP_PID" ] || [ "$same_start" -eq 0 ]
+  else
+    [ "$same_start" -eq 0 ]
   fi
-  marker_launcher_rule "$v1" "$names_desktop" "$alive" "$is_parent" "$parent_desktop" "$env_match"
 }
 
 marker_take() { # how started -> replace or create our claim; 0 ok, 2 unwritable
@@ -418,7 +382,7 @@ marker_add_delegate_locked() { # pid ct -> name the update child as line 4 under
     log "update marker is no longer ours; no delegate written"; return 0
   fi
   if [ -n "$M_DPID" ] && [ "$M_DPID" != "$1" ] && [ "$J_DELEGATE_STATE" -eq 2 ]; then return 0; fi
-  marker_replace "$(marker_canonical "$M_PID" "$M_STARTED_DIGITS" "$M_CT" "$1" "$2")"$'\n' \
+  marker_replace "$(marker_canonical "$M_PID" "$M_STARTED" "$M_CT" "$1" "$2")"$'\n' \
     && log "update marker names update pid $1 (ct $2) as its delegate"
 }
 
@@ -445,7 +409,7 @@ marker_release_locked() { # A7 rule 5 / corpus "release"
   [ -n "$M_PID" ] || return 0
   if [ "$M_PID" = "$MY_PID" ] && [ "$J_OWNER_STATE" -eq 0 ]; then
     if [ -n "$M_DPID" ] && [ "$M_DPID" != "$MY_PID" ] && [ "$J_DELEGATE_STATE" -eq 2 ]; then
-      marker_replace "$(marker_canonical "$M_DPID" "$M_STARTED_DIGITS" "$M_DCT")"$'\n'
+      marker_replace "$(marker_canonical "$M_DPID" "$M_STARTED" "$M_DCT")"$'\n'
       log "handed the update marker to its live delegate pid $M_DPID (hermes update)"
     else
       rm -f "$MARKER" 2>/dev/null
@@ -454,7 +418,7 @@ marker_release_locked() { # A7 rule 5 / corpus "release"
   fi
   if [ "$M_DPID" = "$MY_PID" ] && [ "$J_DELEGATE_STATE" -eq 0 ]; then
     if [ "$J_OWNER_STATE" -ne 1 ]; then
-      marker_replace "$(marker_canonical "$M_PID" "$M_STARTED_DIGITS" "$M_CT")"$'\n'
+      marker_replace "$(marker_canonical "$M_PID" "$M_STARTED" "$M_CT")"$'\n'
     else
       rm -f "$MARKER" 2>/dev/null
     fi
@@ -486,47 +450,12 @@ checkout_lock_path() {
 }
 
 checkout_lock_held() { # 0 iff some process holds the checkout kernel lock right now
-  # The probe takes the REAL lock, so it must never make a concurrent `hermes
-  # update` see it busy: one non-blocking try, given straight back. With perl
-  # (macOS, nearly every Linux) or python3 (the daemon already needs it) the
-  # take and the drop are two consecutive syscalls in one process that opened
-  # the file itself -- no process exit, wait or shell work in between. flock(1)
-  # can only take it on a shell fd, so there the hold spans flock(1)'s exit and
-  # our close. No tool: held (fail closed, the release waits).
-  local path rc tool="$MARKER_LOCK_TOOL_FORCED"
+  local path rc
   path="$(checkout_lock_path)"
   [ -f "$path" ] || return 1
-  if [ -z "$tool" ]; then
-    if command -v perl >/dev/null 2>&1; then tool=perl
-    elif command -v python3 >/dev/null 2>&1; then tool=python3
-    elif command -v flock >/dev/null 2>&1; then tool=flock
-    else tool=none
-    fi
-  fi
-  case "$tool" in
-    perl)
-      perl -MFcntl=:flock -e '
-        open(my $f, "<", $ARGV[0]) or exit 2;
-        flock($f, LOCK_EX | LOCK_NB) or exit 1;
-        flock($f, LOCK_UN); exit 0' "$path"; rc=$? ;;
-    python3)
-      python3 -c '
-import fcntl, os, sys
-try:
-    fd = os.open(sys.argv[1], os.O_RDONLY)
-except OSError:
-    sys.exit(2)
-try:
-    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-except OSError:
-    sys.exit(1)
-fcntl.flock(fd, fcntl.LOCK_UN)' "$path"; rc=$? ;;
-    flock)
-      { exec 8<"$path"; } 2>/dev/null || return 1
-      flock -x -n 8; rc=$?
-      exec 8<&- ;;  # closing our probe fd releases it when we did get it
-    *) rc=1 ;;
-  esac
+  { exec 8<"$path"; } 2>/dev/null || return 1
+  fd_flock 8 0; rc=$?
+  exec 8<&-  # closing our probe releases it when we did get it
   [ "$rc" -eq 1 ]
 }
 

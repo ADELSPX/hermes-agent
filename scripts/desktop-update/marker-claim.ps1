@@ -55,30 +55,6 @@ function Invoke-MarkerAdoptRun($Read, [int]$Desktop, [string]$Run) {
     return $verdict
 }
 
-# The launcher-lineage rule -- ONE rule, the same in marker.sh
-# (marker_launcher_rule); the shared table is
-# tests/scripts/desktop_update/lineage_rule_cases.py. An OLD Desktop's bridge
-# "<launcher pid>\n<started_at>\n" (v1: no ct, no delegate) names the launcher
-# it spawned (its cmd.exe wrapper) instead of itself. It is adopted iff it does
-# not name the Desktop and
-#   the named pid is alive: it is our parent AND (its parent is the Desktop OR
-#                           line 2 == HERMES_UPDATE_STARTED_AT);
-#   the named pid is gone:  line 2 == HERMES_UPDATE_STARTED_AT (`start /b`
-#                           wrappers exit at once).
-function Test-MarkerLauncherRule($Facts) {
-    if (-not $Facts.V1 -or $Facts.NamesDesktop) { return $false }
-    if ($Facts.NamedAlive) { return [bool]($Facts.NamedIsOurParent -and ($Facts.NamedParentIsDesktop -or $Facts.EnvStartedMatches)) }
-    return [bool]$Facts.EnvStartedMatches
-}
-
-function Test-MarkerEnvStartedAt([string]$Line2) {
-    # HERMES_UPDATE_STARTED_AT is plain ASCII digits (no sign, no spaces) of line 2's value.
-    $e = [string]$env:HERMES_UPDATE_STARTED_AT
-    if ($e -cnotmatch '\A[0-9]+\z' -or $Line2 -cnotmatch '\A[0-9]+\z') { return $false }
-    $e = $e.TrimStart('0'); $want = $Line2.TrimStart('0')
-    return $e -ceq $want
-}
-
 function Get-MarkerLineage([int]$Desktop, $Info) {
     # X = our recorded parent: the old Desktop's cmd.exe wrapper.
     $x = Get-ParentProcessId $PID
@@ -88,20 +64,17 @@ function Get-MarkerLineage([int]$Desktop, $Info) {
         $xAlive = (Get-LiveProcessCt $x).Alive
         if ($xAlive) { $xParent = Get-ParentProcessId $x }
     }
-    $launcher = $false
-    if ($Info) {
-        $named = [int64]$Info.Pid
-        $namedAlive = if ($named -eq $x) { $xAlive } else { $named -gt 0 -and (Get-LiveProcessCt $named).Alive }
-        $facts = @{
-            V1 = ($null -eq $Info.Ct -and $Info.DelegatePid -le 0); NamesDesktop = ($named -eq $Desktop)
-            NamedAlive = $namedAlive; NamedIsOurParent = ($x -gt 0 -and $named -eq $x)
-            NamedParentIsDesktop = ($namedAlive -and $named -eq $x -and $xParent -eq $Desktop)
-            EnvStartedMatches = (Test-MarkerEnvStartedAt $Info.StartedAtText)
-        }
-        $launcher = Test-MarkerLauncherRule $facts
+    $envStarted = 0L
+    $hasEnvStarted = [int64]::TryParse("$env:HERMES_UPDATE_STARTED_AT".Trim(), [ref]$envStarted)
+    $namesX = $x -gt 0 -and $Info -and $Info.Pid -eq $x
+    $xLineage = $false
+    if ($namesX) {
+        # Alive: it must still be the Desktop's child. Dead (start /b exits at
+        # once): the marker must carry the startedAt the Desktop gave us.
+        $xLineage = if ($xAlive) { $xParent -eq $Desktop } else { $hasEnvStarted -and $Info.StartedAt -eq $envStarted }
     }
     return @{
-        Parent = $x; ParentAlive = $xAlive; Grandparent = $xParent; LauncherClaim = $launcher
+        Parent = $x; ParentAlive = $xAlive; Grandparent = $xParent; LauncherClaim = $xLineage
         Ancestor = ($x -gt 0 -and ($x -eq $Desktop -or ($xAlive -and $xParent -eq $Desktop)))
     }
 }
@@ -201,7 +174,7 @@ function Add-MarkerDelegate([int[]]$Candidates) {
             $probe = Get-LiveProcessCt $candidate
             if (-not $probe.Alive -or $null -eq $probe.Ct) { continue }
             $line = "delegate:$candidate ct:$(Format-Ct $probe.Ct)"
-            if (-not (Set-MarkerBodyLocked (Format-MarkerBody $info.Pid $info.StartedAtText $info.CtText $line $info.Runs))) { return 'lost' }
+            if (-not (Set-MarkerBodyLocked (Format-MarkerBody $info.Pid $info.StartedAt $info.CtText $line $info.Runs))) { return 'lost' }
             Write-HandoffLog "update marker now names updater pid $candidate as its delegate"
             return 'published'
         }
@@ -217,8 +190,6 @@ function Invoke-MarkerRelease {
     if ($NoMarkerCleanup -or $script:MarkerClaim -notin @('claimed', 'adopted')) { return }
     # R6: never while a survivor of the update still holds the checkout lock --
     # the marker would read free while that process still mutates the checkout.
-    # Line 2 keeps its heartbeat through that wait: an old packaged Desktop would
-    # otherwise age-delete the marker 20 minutes into it.
     $waited = 0
     while (Test-CheckoutLockHeld) {
         if ($waited -eq 0) { Write-HandoffLog "a process still holds the checkout update lock; keeping the update marker until it exits" }
@@ -226,7 +197,6 @@ function Invoke-MarkerRelease {
             Write-HandoffLog "checkout update lock still held after $($waited)s; leaving the update marker"
             return
         }
-        Update-MarkerHeartbeat
         Start-Sleep -Seconds 1
         $waited++
     }
