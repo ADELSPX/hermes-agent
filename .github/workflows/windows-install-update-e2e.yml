@@ -46,27 +46,12 @@ jobs:
           test-environment: 'true'
           prune-python-cache: true
 
-      - name: Run Windows install + update E2E
+      - name: R6 custody live tests (RED baseline c6f803b0b48 + the new Windows tests)
         shell: bash
         run: |
-          scripts/run_tests.sh tests/e2e/core/windows_update/ -- \
-            -m "platforms and integration" -v --tb=short -rA
+          scripts/run_tests.sh tests/hermes_cli/test_update_lock_windows_live.py -- -v --tb=short -rA
         env:
-          HERMES_E2E_WINDOWS_INSTALL: '1'
-          # Machine work dirs (serve.git, transcripts) stay short under runner.temp. The fake
-          # user profiles live in C:\Users itself, where a real one does: the checkout carries
-          # 159-character paths, so a deeper profile hits MAX_PATH where no user would (the
-          # runner is disposable, so writing C:\Users is fine).
-          HERMES_E2E_MACHINE_ROOT: ${{ runner.temp }}\wm
-          HERMES_E2E_PROFILES_ROOT: C:\Users
-          HERMES_E2E_ARTIFACTS: ${{ runner.temp }}\win-update-e2e
-          # One journey per file, all in parallel (each is mostly network + subprocess wait).
-          HERMES_TEST_WORKERS: '6'
-          HERMES_TEST_FILE_TIMEOUT: '2400'
           HERMES_TEST_FILE_RETRIES: '0'
-          OPENROUTER_API_KEY: ''
-          OPENAI_API_KEY: ''
-          NOUS_API_KEY: ''
 
       - name: Upload transcripts, logs and receipts
         if: always()
