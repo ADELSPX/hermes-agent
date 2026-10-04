@@ -9,6 +9,7 @@ checkout import) puts the old tree back so ``hermes update`` can simply run agai
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -148,6 +149,42 @@ def test_killed_pull_is_restored_on_next_launch_and_update_reruns(checkout, monk
     _pull(root)  # `hermes update` again: a normal fast-forward
     assert _git(root, "rev-parse", "HEAD") == b and not marker.exists()
 
+
+def test_restore_runs_the_installers_store_git_when_path_has_none(checkout, monkeypatch, tmp_path):
+    """Windows installs whose only git is the copy install.ps1 staged in PM's store: the launch-time
+    restore must find it like the updater does, release the dead git's index.lock and put the tree back
+    (a bare ``git`` died with WinError 2 there and every update for 10 minutes refused on the lock)."""
+    import shutil
+
+    import pm
+    import pm.paths
+
+    root, a, b = checkout
+    (root / "utils.py").write_text("NEW = 1\n", encoding="utf-8", newline="")  # the killed ff's first write
+    (root / ".git" / "index.lock").write_bytes(b"")  # left by the killed git
+    dead = subprocess.Popen([sys.executable, "-c", "pass"])
+    dead.wait()
+    er.interrupted_pull_marker(root).write_text(f"pid={dead.pid}\npre={a}\ntarget={b}\nstash=\n", encoding="utf-8")
+
+    real_git = shutil.which("git")
+    store = tmp_path / "tools"
+    version = pm.Lockfile(pm.paths.lockfile_path()).version("git")
+    staged = store / f"git-{version}-win32-x64" / "cmd" / "git.exe"
+    staged.parent.mkdir(parents=True)
+    calls = tmp_path / "staged-git-calls"
+    staged.write_text(f'#!/bin/sh\necho "$@" >> "{calls}"\nexec "{real_git}" "$@"\n', encoding="utf-8")
+    staged.chmod(0o755)
+    with monkeypatch.context() as windows:
+        windows.setattr(pm.paths, "store_root", lambda: store)
+        windows.setattr(pm, "current_target", lambda: "win32-x64")
+        windows.setenv("PATH", str(tmp_path / "no-git-here"))
+        assert er.restore_interrupted_pull(root) is True
+    assert calls.read_text(encoding="utf-8-sig").count("rev-parse HEAD") >= 1, "the store's git ran the restore"
+    assert _git(root, "rev-parse", "HEAD") == a and _git(root, "status", "--porcelain") == ""
+    assert not (root / ".git" / "index.lock").exists() and not er.interrupted_pull_marker(root).exists()
+    _pull(root)  # the next `hermes update` is not refused on the lock
+    assert _git(root, "rev-parse", "HEAD") == b
+
     # Every console script (`hermes`, `hermes-agent`, `hermes-acp`) repairs before its entry module imports
     # any other checkout module past hermes_bootstrap: any of them may be a half-written file.
     repo = os.path.realpath(Path(er.__file__).parent.parent)
@@ -270,3 +307,104 @@ def test_concurrent_launches_take_turns_and_all_rerun_from_the_restored_tree(tmp
     assert _git(root, "status", "--porcelain", "--untracked-files=all") == f"M {names[-1]}"
     assert (root / names[-1]).read_text(encoding="utf-8") == "user edit\n"
     assert not marker.exists()
+
+
+def _broken_release(tmp_path: Path, nfiles: int) -> tuple[Path, str, str]:
+    """A checkout whose HEAD is a release with an uncompilable module (``target``) over ``pre``."""
+    root = tmp_path / "install"
+    root.mkdir()
+    _git(root, "init", "-q", "-b", "main")
+    _git(root, "config", "user.email", "t@example.invalid")
+    _git(root, "config", "user.name", "t")
+    (root / "module.py").write_text("good = True\n", encoding="utf-8", newline="")
+    (root / "bulk").mkdir()
+    for i in range(nfiles):  # enough index work that git holds index.lock long enough to be killed
+        (root / "bulk" / f"f{i}.txt").write_text(f"{i}\n", encoding="utf-8", newline="")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-qm", "pre")
+    pre = _git(root, "rev-parse", "HEAD")
+    (root / "module.py").write_text("def broken(:\n", encoding="utf-8", newline="")
+    (root / "added.py").write_text("X = 1\n", encoding="utf-8", newline="")
+    for i in range(0, nfiles, 2):
+        (root / "bulk" / f"f{i}.txt").write_text(f"{i} new\n", encoding="utf-8", newline="")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-qm", "broken target")
+    return root, pre, _git(root, "rev-parse", "HEAD")
+
+
+def _rollback_marker(root: Path, pre: str, target: str) -> Path:
+    marker = er.interrupted_pull_marker(root)
+    marker.write_text(f"pid=0\npre={pre}\ntarget={target}\nstash=\nrollback=branch\n", encoding="utf-8", newline="")
+    return marker
+
+
+def _sigkill_git_once_index_lock_exists(root: Path, *args: str) -> int:
+    """Run a real git and SIGKILL it the moment inotify reports ``.git/index.lock`` created."""
+    import ctypes
+    import signal
+    import struct
+
+    libc = ctypes.CDLL(None, use_errno=True)
+    fd = libc.inotify_init1(0)
+    assert fd >= 0 and libc.inotify_add_watch(fd, str(root / ".git").encode(), 0x100) >= 0  # IN_CREATE
+    git = subprocess.Popen(["git", "-C", str(root), *args], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        while git.poll() is None:
+            buf, i = os.read(fd, 4096), 0
+            while i < len(buf):
+                length = struct.unpack_from("iIII", buf, i)[3]
+                name, i = buf[i + 16:i + 16 + length].rstrip(b"\0"), i + 16 + length
+                if name == b"index.lock":
+                    os.kill(git.pid, signal.SIGKILL)
+                    return git.wait()
+        return git.wait()
+    finally:
+        os.close(fd)
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="inotify kill cell")
+def test_a_rollback_killed_inside_its_reset_is_finished_by_the_next_launch(tmp_path):
+    """The syntax rollback's own ``git reset -q pre`` is SIGKILLed holding ``index.lock``: HEAD is still the
+    broken release. The next launch must reclaim that dead lock, redo the rollback and land on ``pre``
+    whole; the marker (the rollback's only record) may go only then."""
+    for attempt in range(10):
+        cell = tmp_path / f"try{attempt}"
+        cell.mkdir()
+        root, pre, target = _broken_release(cell, 3000)
+        marker = _rollback_marker(root, pre, target)
+        _sigkill_git_once_index_lock_exists(root, "reset", "-q", pre)
+        if (root / ".git" / "index.lock").exists() and _git(root, "rev-parse", "HEAD") == target:
+            break
+    else:
+        pytest.fail("harness: the SIGKILL never landed while git held index.lock")
+
+    assert er.restore_interrupted_pull(root) is True, "the broken files were put back: the caller relaunches"
+    assert _git(root, "rev-parse", "HEAD") == pre
+    assert _git(root, "status", "--porcelain", "--untracked-files=all") == ""
+    assert (root / "module.py").read_text(encoding="utf-8") == "good = True\n"
+    assert not (root / ".git" / "index.lock").exists() and not marker.exists()
+
+
+def test_a_rollback_marker_outlives_a_lock_that_may_still_be_live(tmp_path):
+    """While a live process holds ``index.lock`` the rollback cannot resume: HEAD stays on the broken
+    release, so the marker must stay too (never 'git finished'), and the lock is not stolen. Once the
+    holder is gone the next launch finishes the rollback."""
+    root, pre, target = _broken_release(tmp_path, 20)
+    marker = _rollback_marker(root, pre, target)
+    lock = root / ".git" / "index.lock"
+    holder = subprocess.Popen([sys.executable, "-c", "import sys, time; f = open(sys.argv[1], 'w'); "
+                               "print('held', flush=True); time.sleep(120)", str(lock)],
+                              stdout=subprocess.PIPE, text=True)
+    try:
+        assert holder.stdout.readline().strip() == "held"
+        assert er.restore_interrupted_pull(root) is False
+        assert marker.exists(), "a rollback that could not run erased its own recovery record"
+        assert lock.exists() and _git(root, "rev-parse", "HEAD") == target
+    finally:
+        holder.kill()
+        holder.wait()
+    if sys.platform == "darwin" and not shutil.which("lsof"):
+        pytest.skip("no lsof: the dead lock cannot be proven dead here")
+    assert er.restore_interrupted_pull(root) is True
+    assert _git(root, "rev-parse", "HEAD") == pre and not marker.exists() and not lock.exists()
+    assert _git(root, "status", "--porcelain", "--untracked-files=no") == ""
