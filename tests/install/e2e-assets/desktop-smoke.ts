@@ -329,18 +329,18 @@ export async function runInstalledDesktopSmoke(options: SmokeOptions, launchApp:
         throw new Error(`Desktop resolved Hermes home ${identity.hermesHome ?? '(unreported)'} instead of the predicted ${predictedHome}`)
       }
     }
-    const backend = localBackendProcess(Number(base.port), running.pid)
-    // Evidence before assertions: the backend's identity must be on disk when
-    // assertBackendOrigin fails, or the leg reports a mismatch with nothing to
-    // inspect.
+    // The ordinary host-attach path may reuse the updater's relaunched app's
+    // backend. Observe the ledger the app reads for this home (its machine root),
+    // not an arbitrary listener, and retain the OS listener + installed-tree proof below.
     fs.writeFileSync(path.join(out, `desktop-backend-${options.phase}.log`), connection.logs.map(redact).join('\n'))
-    // `identity.hermesRoot` was asserted against options.root above, and the listener was
-    // tied to this app process when it was identified, so on a platform that cannot read
-    // the backend's own environment those two facts are the available evidence.
+    const backend = localBackendProcess(Number(base.port), running.pid, predictedHome ?? options.home)
+    // `identity.hermesRoot` was asserted against options.root above. For a listener that
+    // descends from this app process, on a platform that cannot read the backend's own
+    // environment, those two facts are the available evidence; a ledger-attached host
+    // backend is not tied to the app by ancestry and must prove its tree itself.
     assertBackendOrigin(backend, options.root, options.origin, { appReportedRoot: identity.hermesRoot })
     const provenanceCommit = readInstallationCommit(options.root, options.origin)
     if (provenanceCommit !== options['expect-commit']) { throw new Error('Installed commit differs from --expect-commit') }
-    fs.writeFileSync(path.join(out, `desktop-backend-${options.phase}.log`), connection.logs.map(redact).join('\n'))
     // Trace only chat actions. Connection probes can return credential-bearing logs.
     await app.context().tracing.start({ screenshots: true, snapshots: false, sources: false })
     const chat = await runDesktopChatSmoke(page, { mockUrl, phase: options.phase, outDir: out, expectCommit: options['expect-commit'], provenanceCommit })
