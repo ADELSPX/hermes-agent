@@ -553,6 +553,7 @@ def _looks_like_compaction_summary(msg: Dict[str, Any], content: str) -> bool:
     if (
         not content.rstrip().endswith(_SUMMARY_END_MARKER)
         or content.startswith(_MERGED_PRIOR_CONTEXT_HEADER)
+        or _MERGED_SUMMARY_DELIMITER in content
         or role == "tool"
         or (role in ("user", "assistant") and not msg.get(COMPRESSED_SUMMARY_METADATA_KEY))
     ):
@@ -5585,10 +5586,13 @@ Write only the summary body. Do not include any preamble or prefix."""
         else:
             # Old tail content is kept as delimited reference BEFORE the summary; the end marker goes last.
             suffix = "\n\n" + _MERGED_SUMMARY_DELIMITER + "\n\n" + summary + "\n\n" + _SUMMARY_END_MARKER
-            msg["content"] = _append_text_to_content(
-                _append_text_to_content(old_content, suffix, prepend=False),
-                _MERGED_PRIOR_CONTEXT_HEADER + "\n", prepend=True,
-            )
+            merged = _append_text_to_content(old_content, suffix, prepend=False)
+            # An assistant carrier is the model's own previous turn: a bracketed header at its start is
+            # what weak models copy as the opening of their next reply, followed by the old text (#131104).
+            # Its own words need no "not a new message" label; the delimiter alone marks where they end.
+            if msg.get("role") != "assistant":
+                merged = _append_text_to_content(merged, _MERGED_PRIOR_CONTEXT_HEADER + "\n", prepend=True)
+            msg["content"] = merged
         # Frontends use this to detect a summary-prefixed message.
         msg[COMPRESSED_SUMMARY_METADATA_KEY], msg[COMPRESSED_SUMMARY_HAS_USER_TURN_KEY] = True, bool(self._summary_has_user_turn)
         # Rewritten content: drop the stale api_content sidecar so replay can't resend pre-merge bytes.
