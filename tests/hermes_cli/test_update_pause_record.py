@@ -501,3 +501,33 @@ def test_an_unreadable_retired_list_claims_nothing_and_forgets_nothing(tmp_path,
         retired.chmod(0o644)
     assert json.loads(retired.read_text(encoding="utf-8-sig"))["ids"] == [done], "the history was rewritten"
     assert done not in owed()
+
+
+def test_a_corrupt_retired_list_names_its_remedy_while_owed_and_is_moved_aside_when_not(tmp_path, monkeypatch, capsys):
+    """R9-3: a list that cannot be parsed blocks recovery only while it may guard something, and
+    then says how to clear it; with no record or claim on disk it is moved aside once, not
+    reported on every launch."""
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    src = pause_record.record_path()
+    retired = src.with_suffix(".retired")
+    pause_record.write({"pause_id": "a" * 32, "resume_needed": True, "profiles": {"default": 4242}},
+                       owner=pause_record.UNOWNED)
+    retired.write_text("{not json", encoding="utf-8")
+
+    pause_record.recover(["status"])
+    assert f"delete {retired} to retry" in capsys.readouterr().err, "an owed list's warning names no remedy"
+    with pytest.raises(pause_record.RetiredUnknown, match="to retry"):
+        pause_record.adopt_orphans()
+    assert retired.read_text(encoding="utf-8-sig") == "{not json" and src.exists(), "a list guarding debt was dropped"
+
+    src.unlink()
+    for body in ("", '["a"]'):  # a torn write; valid JSON of the wrong shape
+        retired.write_text(body, encoding="utf-8")
+        pause_record.recover(["status"])
+        assert "Moved the unreadable retired" in capsys.readouterr().err
+        assert not retired.exists(), "a list guarding nothing still blocks every launch"
+        pause_record.recover(["status"])
+        assert capsys.readouterr().err == "", "the warning repeats on the next launch"
+    aside = sorted(p.read_text(encoding="utf-8-sig") for p in tmp_path.glob(f"{retired.name}.corrupt-*"))
+    assert aside == ["", '["a"]']
+    assert pause_record.adopt_orphans() == (None, [])

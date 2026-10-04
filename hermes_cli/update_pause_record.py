@@ -29,6 +29,7 @@ unlinks its files: an unlink Windows refuses (a reader holding the file without
 FILE_SHARE_DELETE) leaves a copy that is redundant by id, never an obligation that executes again.
 The list is read only under the mutex, and only its absence means "nothing retired": a list that
 cannot be read means unknown, so nothing is claimed and the list is never rewritten from that read.
+With no record or claim on disk it guards nothing, so it is moved aside instead.
 """
 
 from __future__ import annotations
@@ -330,18 +331,38 @@ def _retired_path(path: Path) -> Path:
 
 def _retired(path: Path) -> set[str]:
     """The completed obligation ids (call under the mutex). Only an absent list is empty: one that
-    exists but cannot be read raises :class:`RetiredUnknown`, so a completed obligation is never
-    claimed again and the list is never rewritten from a read that failed."""
+    exists but cannot be read raises :class:`RetiredUnknown` while anything is owed, so a completed
+    obligation is never claimed again and the list is never rewritten from a read that failed."""
     target = _retired_path(path)
     try:
         ids = json.loads(target.read_text(encoding="utf-8-sig")).get("ids")
+        if not isinstance(ids, list):
+            raise ValueError("no id list")
     except FileNotFoundError:
         return set()
     except (OSError, ValueError, AttributeError) as exc:
-        raise RetiredUnknown(f"cannot read the retired paused-gateway list {target}: {exc}") from exc
-    if not isinstance(ids, list):
-        raise RetiredUnknown(f"the retired paused-gateway list {target} is malformed")
+        return _unreadable_retired(path, target, exc)
     return {str(i) for i in ids}
+
+
+def _unreadable_retired(path: Path, target: Path, exc: Exception) -> set[str]:
+    """A list that cannot be read guards nothing while no record or claim exists (checked under the
+    mutex, so none appears meanwhile): move it aside and read it as empty. While something is owed,
+    which of it is complete stays unknown: raise, naming the remedy."""
+    why = f"cannot read the retired paused-gateway list {target}: {exc}"
+    if path.exists() or _claims(path):
+        raise RetiredUnknown(f"{why}; delete {target} to retry (a gateway restart that already "
+                             "completed may run once more)") from exc
+    aside = target.with_name(f"{target.name}.corrupt-{time.time_ns()}")
+    try:
+        os.replace(target, aside)
+    except FileNotFoundError:
+        return set()
+    except OSError as move_exc:
+        raise RetiredUnknown(f"{why}; moving it aside failed ({move_exc}); delete {target} to retry") from exc
+    print(f"  ⚠ Moved the unreadable retired paused-gateway list aside to {aside} (no paused gateway "
+          f"was owed): {exc}", file=sys.stderr)
+    return set()
 
 
 def _retire(path: Path, carriers: list[tuple[Path, dict]]) -> None:
