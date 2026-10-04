@@ -98,4 +98,4 @@ def test_recorder_keeps_both_spans_and_the_readout_divides_by_decode_time(agent)
 
     usage = _get_usage(agent)
     assert usage["avg_latency_s"] == 25.0  # latency stays whole-call: (45 + 5) / 2
-    assert usage["avg_tps"] == pytest.approx(600 / 11.0)  # 600 tokens over 11 s of generation, not 50 s
+    assert usage["avg_tps"] == round(600 / 11.0, 1)  # 600 tokens over 11 s of generation, not 50 s
