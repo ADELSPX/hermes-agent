@@ -17,10 +17,16 @@
  * Dropping it as stale strands exactly the machine it exists to serve. It is
  * still consumed once (the file is unlinked before any age check), so it
  * cannot resurface on a later boot.
+ *
+ * Vocabulary (C2): `ok:false` ONLY when the install is still on the previous
+ * version; `ok:true` + `warnings` when the update committed but follow-up work
+ * failed.
  */
 
 import fs from 'fs'
 import path from 'path'
+
+import { RUN_ID_RE } from './update-marker-judge'
 
 export const HANDOFF_RESULT_MAX_AGE_MS = 30 * 60 * 1000
 
@@ -34,15 +40,36 @@ export interface HandoffResult {
   manual: boolean
   message: string
   branch: string
+  /** C2: `ok:true` with follow-up work that failed after the commit point. */
+  warnings: string[]
 }
 
 export function handoffResultPath(hermesHome: string): string {
   return path.join(hermesHome, '.hermes-update-result.json')
 }
 
+/**
+ * Parse first, then consume (desktop V19): an unparseable file is renamed to
+ * `.corrupt` and logged — never silently dropped — so a torn result stays
+ * inspectable. Match the stable marker run ID, not line 2 (a heartbeat that
+ * can change before this Desktop even opens). Only older producers without
+ * run_id, or boots without an identified marker, use started_at correlation.
+ */
 export function readAndConsumeHandoffResult(
   hermesHome: string,
-  { now = Date.now, maxAgeMs = HANDOFF_RESULT_MAX_AGE_MS }: { now?: () => number; maxAgeMs?: number } = {}
+  {
+    now = Date.now,
+    maxAgeMs = HANDOFF_RESULT_MAX_AGE_MS,
+    expectedStartedAt = null,
+    expectedRunId = null,
+    log = () => {}
+  }: {
+    now?: () => number
+    maxAgeMs?: number
+    expectedStartedAt?: number | null
+    expectedRunId?: string | null
+    log?: (line: string) => void
+  } = {}
 ): HandoffResult | null {
   const file = handoffResultPath(hermesHome)
   let raw: string
@@ -53,26 +80,59 @@ export function readAndConsumeHandoffResult(
     return null
   }
 
-  // Consume unconditionally — even a malformed/stale file must not be
-  // re-reported on every subsequent boot.
+  let parsed: any
+
+  try {
+    parsed = JSON.parse(raw)
+  } catch (error) {
+    log(`[updates] hand-off result is not valid JSON (${(error as Error).message}); kept as ${path.basename(file)}.corrupt`)
+
+    try {
+      fs.renameSync(file, `${file}.corrupt`)
+    } catch {
+      void 0
+    }
+
+    return null
+  }
+
+  // Consumed once parsed — a stale or foreign result must not be re-reported
+  // on every later boot.
   try {
     fs.unlinkSync(file)
   } catch {
     // Best-effort; a locked file just gets consumed on the next boot.
   }
 
-  let parsed: any
+  const manual = Boolean(parsed?.manual)
+  const finishedAt = Number(parsed?.finished_at)
+  const startedAt = Number(parsed?.started_at)
 
-  try {
-    parsed = JSON.parse(raw)
-  } catch {
+  if (!Number.isFinite(finishedAt)) {
+    log('[updates] hand-off result has no finished_at; discarded')
+
     return null
   }
 
-  const manual = Boolean(parsed?.manual)
-  const finishedAt = Number(parsed?.finished_at)
+  const runId = parsed?.run_id
 
-  if (!Number.isFinite(finishedAt)) {
+  // Missing means legacy. A present but malformed ID must not downgrade to
+  // weaker timestamp matching (nor be normalized into another run).
+  if (runId !== undefined && (typeof runId !== 'string' || RUN_ID_RE.exec(runId)?.[0] !== runId)) {
+    log('[updates] hand-off result has an invalid run_id; discarded')
+
+    return null
+  }
+
+  if (expectedRunId !== null && runId !== undefined) {
+    if (runId !== expectedRunId) {
+      log(`[updates] hand-off result is for run ${runId}, not ${expectedRunId}; discarded`)
+
+      return null
+    }
+  } else if (expectedStartedAt !== null && Number.isFinite(startedAt) && startedAt !== expectedStartedAt) {
+    log(`[updates] hand-off result is for the run started at ${startedAt}, not ${expectedStartedAt}; discarded`)
+
     return null
   }
 
@@ -88,6 +148,7 @@ export function readAndConsumeHandoffResult(
     exitCode: Number.isFinite(Number(parsed?.exit_code)) ? Number(parsed.exit_code) : 1,
     manual,
     message: typeof parsed?.message === 'string' ? parsed.message : '',
-    branch: typeof parsed?.branch === 'string' ? parsed.branch : ''
+    branch: typeof parsed?.branch === 'string' ? parsed.branch : '',
+    warnings: Array.isArray(parsed?.warnings) ? parsed.warnings.map(String).filter(Boolean) : []
   }
 }
