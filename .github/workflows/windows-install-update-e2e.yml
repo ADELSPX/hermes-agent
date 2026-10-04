@@ -63,6 +63,13 @@ jobs:
           test-environment: 'true'
           prune-python-cache: true
 
+      - name: R6 custody live tests (updater git/Node join the owner's kill-on-close job)
+        shell: bash
+        run: |
+          scripts/run_tests.sh tests/hermes_cli/test_update_lock_windows_live.py -- -v --tb=short -rA
+        env:
+          HERMES_TEST_FILE_RETRIES: '0'
+
       - name: Run Windows install + update E2E
         shell: bash
         run: |
@@ -70,7 +77,7 @@ jobs:
             -m "platforms and integration" -v --tb=short -rA
         env:
           HERMES_E2E_WINDOWS_INSTALL: '1'
-          HERMES_E2E_STRICT_ACCEPTANCE: ${{ inputs.strict_acceptance }}
+          HERMES_E2E_STRICT_ACCEPTANCE: upd-txn  # r6-core acceptance proof branch
           # Machine work dirs (serve.git, transcripts) stay short under runner.temp. The fake
           # user profiles live in C:\Users itself, where a real one does: the checkout carries
           # 159-character paths, so a deeper profile hits MAX_PATH where no user would (the
