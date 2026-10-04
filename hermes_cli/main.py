@@ -2525,16 +2525,16 @@ def cmd_update(args):
     from hermes_cli.update_cmd import _cmd_update_impl
     from pm import InstallError
 
-    def _custody_refusal() -> str | None:
+    def _custody_refusal(exc: BaseException | None = None) -> str | None:
         # m2: readers swallow an OSError, so a refused update child can end the run as a misleading
-        # downstream error; the refusal is what stopped it. Never on POSIX (nothing refuses there).
+        # downstream error; the refusal is printed above it. Never on POSIX (nothing refuses there).
         custody = sys.modules.get("hermes_cli.update_custody")
-        return custody.refusal_notice() if custody is not None else None
+        return custody.refusal_notice(error=exc) if custody is not None else None
 
     try:
         _cmd_update_impl(args, gateway_mode=gateway_mode)
     except (InstallError, OSError, subprocess.SubprocessError) as exc:
-        refusal = _custody_refusal()
+        refusal = _custody_refusal(exc)
         print(refusal or f"✗ Update failed: {exc}")
         _finalize_update_receipt(1, f"{type(exc).__name__}: {exc}")
         if gateway_mode:

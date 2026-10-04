@@ -99,7 +99,7 @@ _RETRY = ("Run {command} again from a regular terminal, outside any sandbox or t
 # This run's custody (m2): whether an update child already ran in custody, and the first refusal.
 # Many readers swallow an OSError (a reader's None, a best-effort probe), so a refusal can end
 # the update as a misleading downstream error; the command's failure path prints
-# :func:`refusal_notice` instead.
+# :func:`refusal_notice` above that error.
 _RUN: dict = {"ran": False, "refused": None}
 
 
@@ -133,15 +133,21 @@ def _past_commit() -> bool:
     return current is not None and any(stage.get("name") == "apply" for stage in current.data.get("stages") or ())
 
 
-def refusal_notice(command: str = "hermes update") -> str | None:
-    """What the command's failure path prints when this run refused an update child (m2), in
-    place of whatever generic error the refusal turned into downstream; ``None`` otherwise."""
+def refusal_notice(command: str = "hermes update", error: BaseException | None = None) -> str | None:
+    """What the command's failure path prints when this run refused an update child (m2), with
+    the ``error`` the run then failed with under it; ``None`` otherwise. Whether anything changed
+    is judged now, not at the refusal (R9-2): a later child may have run and the update may have
+    passed its commit point since."""
     if _RUN["refused"] is None:
         return None
     exc, unchanged = _RUN["refused"]
+    unchanged = unchanged and not _RUN["ran"] and not _past_commit()
     outcome = ("Nothing was changed: no update step had run yet." if unchanged else
-               "Update steps before it had already run.")
-    return f"✗ `{command}` stopped: {exc.reason}\n  {outcome}\n  {_RETRY.format(command=f'`{command}`')}"
+               "Some update steps had already run.")
+    notice = f"✗ `{command}` stopped: {exc.reason}\n  {outcome}\n  {_RETRY.format(command=f'`{command}`')}"
+    if error is not None and not isinstance(error, CustodyRefused):
+        notice += f"\n✗ Update failed: {error}"
+    return notice
 
 
 def git_subcommand(args: Sequence[str]) -> str | None:
