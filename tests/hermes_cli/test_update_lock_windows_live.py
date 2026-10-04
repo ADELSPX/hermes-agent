@@ -198,7 +198,8 @@ def test_killed_owner_takes_its_node_build_down(tmp_path):
 # alive means the checkout lock is still held — or the writer never ran and the owner refused it
 # with a clear message. Never a live writer behind a free lock.
 _REFUSE_JOBS = (
-    "import ctypes\n"
+    "import ctypes, faulthandler\n"
+    "faulthandler.dump_traceback_later(40, exit=True)\n"
     "from hermes_cli import update_lock as _ul\n"
     "_k = ctypes.WinDLL('kernel32', use_last_error=True)\n"
     "_k.CreateEventW.restype = ctypes.c_void_p\n"
