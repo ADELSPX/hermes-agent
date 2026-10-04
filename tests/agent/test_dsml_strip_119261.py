@@ -1,64 +1,54 @@
-"""DeepSeek DSML native-markup leak fail-soft (#119261).
+"""DeepSeek DSML native-markup leak fail-soft (#119261, #54283).
 
-DeepSeek V4 Pro via OpenRouter randomly emits its native DSML tool-call
-serialization as visible text (fullwidth pipes U+FF5C)::
-
-    <｜DSML｜tool_calls> <｜DSML｜invoke name="terminal"> ... </｜DSML｜invoke> </｜DSML｜tool_calls>
-
-Neither ``strip_think_blocks`` (shared; everything routes through it) nor
-its ``cli._strip_reasoning_tags`` mirror knew these tags, so the raw markup
-reached Desktop and the turn died there. Both strippers must drop DSML
-blocks/orphans/cut-tails so the existing empty-response recovery retries
-the turn instead of displaying garbage.
+DeepSeek emits its native DSML tool-call serialization as visible text
+(fullwidth pipes U+FF5C) via OpenRouter and other OpenAI-compatible hosts, and
+Bedrock's deepseek.v3.2 leaks a cut ``<｜DSML｜function_calls`` opener beside a
+valid toolUse block. Both strippers (storage ``strip_think_blocks`` and the CLI
+display mirror) must drop blocks, orphan closers and cut tails so the existing
+empty-response recovery retries the turn instead of displaying garbage, and so
+replayed history stops teaching the model to write calls as text.
 """
+
+import pytest
 
 from agent.agent_runtime_helpers import strip_think_blocks
 from cli import _strip_reasoning_tags
 
-# Exact shape from the issue report (fullwidth VERTICAL BAR U+FF5C).
+P = "\uff5c"  # fullwidth VERTICAL BAR
+
+# Exact shape from the #119261 report.
 _ISSUE_SAMPLE = (
-    "<\uff5cDSML\uff5ctool_calls> "
-    "<\uff5cDSML\uff5cinvoke name=\"terminal\"> "
-    "<\uff5cDSML\uff5cparameter name=\"background\" string=\"false\">true</\uff5cDSML\uff5cparameter> "
-    "<\uff5cDSML\uff5cparameter name=\"command\" string=\"true\">"
-    "npx five-server . --port 23456 --open=false</\uff5cDSML\uff5cparameter> "
-    "</\uff5cDSML\uff5cinvoke> "
-    "</\uff5cDSML\uff5ctool_calls>"
+    f"<{P}DSML{P}tool_calls> <{P}DSML{P}invoke name=\"terminal\"> "
+    f"<{P}DSML{P}parameter name=\"background\" string=\"false\">true</{P}DSML{P}parameter> "
+    f"<{P}DSML{P}parameter name=\"command\" string=\"true\">npx five-server . --port 23456</{P}DSML{P}parameter> "
+    f"</{P}DSML{P}invoke> </{P}DSML{P}tool_calls>"
 )
 
-
-def _both(text: str) -> tuple[str, str]:
-    return _strip_reasoning_tags(text), strip_think_blocks(None, text)
+_STRIPPERS = (_strip_reasoning_tags, lambda text: strip_think_blocks(None, text))
 
 
-class TestDsmlLeakStripped:
-    def test_issue_sample_fully_stripped(self):
-        """Pure-DSML content strips to nothing -> empty-recovery retries, no death."""
-        for out in _both(_ISSUE_SAMPLE):
-            assert "DSML" not in out
-            assert out.strip() == ""
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        (_ISSUE_SAMPLE, ""),
+        (f"Answer <{P}DSML{P}parameter name=\"x\">1</{P}DSML{P}parameter> tail", "Answer  tail"),
+        (f"done</{P}DSML{P}invoke> more</{P}DSML{P}tool_calls>", "done more"),
+        # Stream cut mid-serialization (#101899 analog): drop from the opener on.
+        (f"Waiting.\n<{P}DSML{P}invoke name=\"terminal\">partial", "Waiting."),
+        # Bedrock deepseek.v3.2: the opener itself is cut before its ``>``.
+        (f"I'll check the repo.\n\n<{P}DSML{P}function_calls", "I'll check the repo."),
+        ('<|DSML|invoke name="terminal">x</|DSML|invoke>ok', "ok"),
+    ],
+)
+def test_dsml_leak_stripped_on_both_strippers(text, expected):
+    # Whitespace-insensitive: the strippers trim/fuse around removed markup the
+    # same way the ASCII tool-call closers already do; the invariant is that the
+    # markup is gone and the prose survives in order.
+    for strip in _STRIPPERS:
+        assert "".join(strip(text).split()) == "".join(expected.split())
 
-    def test_inline_block_prose_survives(self):
-        for out in _both("Answer <\uff5cDSML\uff5cparameter name=\"x\">1</\uff5cDSML\uff5cparameter> tail"):
-            assert "Answer" in out and out.rstrip().endswith("tail")
-            assert "DSML" not in out
 
-    def test_orphan_closers_stripped(self):
-        for out in _both("done</\uff5cDSML\uff5cinvoke> more</\uff5cDSML\uff5ctool_calls>"):
-            assert "DSML" not in out
-            assert "done" in out and "more" in out
-
-    def test_unterminated_opener_cut_to_prefix(self):
-        """Stream cut mid-serialization (#101899 analog): drop from opener to end."""
-        for out in _both("Waiting.\n<\uff5cDSML\uff5cinvoke name=\"terminal\">partial"):
-            assert out.strip() == "Waiting."
-
-    def test_ascii_pipe_variant_stripped(self):
-        for out in _both('<|DSML|invoke name="terminal">x</|DSML|invoke>ok'):
-            assert "DSML" not in out
-            assert out.rstrip().endswith("ok")
-
-    def test_plain_prose_untouched(self):
-        text = "DSML is a markup language. Use | pipes | freely."
-        assert _strip_reasoning_tags(text) == text
-        assert strip_think_blocks(None, text) == text
+def test_plain_prose_mentioning_dsml_untouched():
+    text = "DSML is a markup language. Use | pipes | freely."
+    for strip in _STRIPPERS:
+        assert strip(text) == text
