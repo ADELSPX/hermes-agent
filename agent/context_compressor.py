@@ -4894,6 +4894,40 @@ Write only the summary body. Do not include any preamble or prefix."""
             and rest.removeprefix(_INFLIGHT_TASK_REPLAY_HEADER).strip()
         )
 
+    @staticmethod
+    def _is_inflight_restatement(message: Any) -> bool:
+        """A standalone user row re-stating an unfinished request after a handoff (#131104).
+
+        It keeps the original's ``message_uid``; the model needs it, a transcript shows the
+        request once (the original where that row is in the same read, else this text unframed).
+        """
+        return (
+            isinstance(message, dict) and message.get("role") == "user"
+            and _content_text_for_contains(message.get("content")).lstrip().startswith(_INFLIGHT_TASK_REPLAY_HEADER)
+        )
+
+    @staticmethod
+    def _without_inflight_replay_header(message: Dict[str, Any]) -> Dict[str, Any]:
+        """A copy of *message* whose leading in-flight replay header is removed (text or first text part)."""
+        content = message.get("content")
+        if isinstance(content, str):
+            return {**message, "content": content.lstrip().removeprefix(_INFLIGHT_TASK_REPLAY_HEADER).lstrip()}
+        if not isinstance(content, list):
+            return message.copy()
+        parts = list(content)
+        for index, item in enumerate(parts):
+            text = _part_text(item)
+            if not isinstance(text, str) or not text.strip():
+                continue
+            if text.lstrip().startswith(_INFLIGHT_TASK_REPLAY_HEADER):
+                rest = text.lstrip().removeprefix(_INFLIGHT_TASK_REPLAY_HEADER).lstrip()
+                if rest:
+                    parts[index] = _with_part_text(item, rest)
+                else:
+                    parts.pop(index)
+            break
+        return {**message, "content": parts}
+
     @classmethod
     def _find_inflight_user_task(
         cls, messages: List[Dict[str, Any]]
