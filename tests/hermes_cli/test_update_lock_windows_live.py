@@ -198,7 +198,8 @@ def test_killed_owner_takes_its_node_build_down(tmp_path):
 # alive means the checkout lock is still held — or the writer never ran and the owner refused it
 # with a clear message. Never a live writer behind a free lock.
 _REFUSE_JOBS = (
-    "import ctypes\n"
+    "import ctypes, faulthandler\n"
+    "faulthandler.dump_traceback_later(40, exit=True)\n"
     "from hermes_cli import update_lock as _ul\n"
     "_k = ctypes.WinDLL('kernel32', use_last_error=True)\n"
     "_k.CreateEventW.restype = ctypes.c_void_p\n"
@@ -212,9 +213,12 @@ REFUSED = "so it was not run"
 def _writer_fenced_or_refused(tmp_path: Path, install: Path, owner_args: list[str]) -> str:
     import psutil
 
-    owner = subprocess.Popen([sys.executable, "-c", *owner_args], stdin=subprocess.DEVNULL,
-                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8",
-                             errors="replace")
+    # Output to a file, not a pipe: nobody drains a pipe while we poll, and a refusal's traceback
+    # (it quotes the launcher argv) outgrows the pipe buffer and blocks the owner on write.
+    log = tmp_path / "owner.log"
+    with open(log, "wb") as sink:
+        owner = subprocess.Popen([sys.executable, "-c", *owner_args], stdin=subprocess.DEVNULL,
+                                 stdout=sink, stderr=subprocess.STDOUT)
     pid_file, tree = tmp_path / "blocker.pid", []
 
     def started() -> bool:
@@ -227,7 +231,8 @@ def _writer_fenced_or_refused(tmp_path: Path, install: Path, owner_args: list[st
             time.sleep(0.1)
         time.sleep(0.5)  # an exiting owner's writer may still be starting
         if not started():
-            out = owner.communicate(timeout=30)[0]
+            owner.wait(timeout=30)
+            out = log.read_text(encoding="utf-8-sig", errors="replace")
             assert owner.returncode != 0 and REFUSED in out, f"the owner neither ran nor refused its writer:\n{out}"
             return "refused"
         blocker = psutil.Process(int(pid_file.read_text(encoding="utf-8-sig")))

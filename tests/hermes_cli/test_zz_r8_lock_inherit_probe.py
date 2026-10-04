@@ -48,5 +48,7 @@ def test_probe_inherited_lock_handle_after_owner_death(tmp_path):
         print(f"PROBE held_before={held_before} child_alive={alive} child_handles={handles} "
               f"held_after_owner_killed={held_after}")
         assert held_before and alive
+        # The claim under proof: an inherited handle does NOT keep the msvcrt lock (owner-scoped).
+        assert not held_after, "an inherited lock handle kept the checkout locked after the owner died"
     finally:
         child.kill()
