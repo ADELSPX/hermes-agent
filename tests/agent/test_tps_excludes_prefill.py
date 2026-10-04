@@ -86,7 +86,9 @@ def _record(agent, api_duration, decode_seconds):
         api_duration=api_duration, compression_attempts=0, max_compression_attempts=3)
 
 
-def test_usage_recorder_keeps_whole_call_and_decode_spans_side_by_side(agent):
+def test_recorder_keeps_both_spans_and_the_readout_divides_by_decode_time(agent):
+    from tui_gateway.server import _get_usage
+
     _record(agent, api_duration=45.0, decode_seconds=6.0)
     _record(agent, api_duration=5.0, decode_seconds=None)  # nothing streamed: whole call
 
@@ -94,12 +96,6 @@ def test_usage_recorder_keeps_whole_call_and_decode_spans_side_by_side(agent):
     assert list(agent._api_decode_history) == [6.0, 5.0]
     assert list(agent._api_output_history) == [300, 300]
 
-
-def test_status_bar_tps_is_decode_speed_after_a_long_prefill(agent):
-    from tui_gateway.server import _get_usage
-
-    _record(agent, api_duration=45.0, decode_seconds=6.0)
-
     usage = _get_usage(agent)
-    assert usage["avg_latency_s"] == 45.0
-    assert usage["avg_tps"] == 50.0  # 300 tokens in 6 s of generation, not 300 / 45
+    assert usage["avg_latency_s"] == 25.0  # latency stays whole-call: (45 + 5) / 2
+    assert usage["avg_tps"] == pytest.approx(600 / 11.0)  # 600 tokens over 11 s of generation, not 50 s
