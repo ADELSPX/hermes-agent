@@ -20,9 +20,12 @@ live ``MainPID``, so restarting each one restarts the host process N times.
 
 from __future__ import annotations
 
+import base64
+import contextlib
 import json
 import logging
 import os
+import tempfile
 import time
 from pathlib import Path
 from typing import Any, Callable, Iterable, Optional
@@ -35,24 +38,36 @@ HOST_OBLIGATION_NAME = "host-update-restart.json"
 _RECORD_VERSION = 1
 
 
-def host_obligation_path() -> Optional[Path]:
-    """Path of the host obligation record, or ``None`` when the host state dir is unresolvable."""
-    try:
-        from gateway.host_rendezvous import host_state_dir
+def host_obligation_path() -> Path:
+    """Path of the host obligation record."""
+    # Not ``gateway.host_rendezvous.host_state_dir``: ``gateway.status`` imports ``utils`` -> ruamel,
+    # absent from the historical interpreter an old updater's takeover arms this record in; the
+    # recovery module's stdlib copy of the rule is drift-tested against the gateway resolver.
+    from hermes_cli.update_restart_recovery import _host_state_dir
 
-        return host_state_dir() / HOST_OBLIGATION_NAME
-    except Exception:  # pragma: no cover - import/env failure must never break the updater
-        logger.debug("Host obligation path unavailable", exc_info=True)
-        return None
+    return Path(_host_state_dir()) / HOST_OBLIGATION_NAME
+
+
+def _write_record(path: Path, record: dict) -> None:
+    """``utils.atomic_json_write(path, record, mode=0o600)`` in stdlib only (see above): the temp
+    file is 0600 from ``mkstemp``, fsynced, then renamed over the record."""
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.stem}_", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(record, handle, indent=2, ensure_ascii=False)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
 
 
 def read_host_obligation() -> Optional[dict]:
     """The published obligation record, or ``None`` when absent/corrupt/foreign-versioned."""
-    path = host_obligation_path()
-    if path is None:
-        return None
     try:
-        payload = json.loads(path.read_text(encoding="utf-8-sig"))
+        payload = json.loads(host_obligation_path().read_text(encoding="utf-8-sig"))
     except (OSError, UnicodeDecodeError, ValueError):
         return None
     if not isinstance(payload, dict) or payload.get("version") != _RECORD_VERSION:
@@ -66,11 +81,8 @@ def host_obligation_present() -> bool:
     Fail-closed: a corrupt record is an obligation whose terms are unknown, never a discharged
     one — the restart is still owed and the reader falls back to "no recorded inventory".
     """
-    path = host_obligation_path()
-    if path is None:
-        return False
     try:
-        return path.is_file()
+        return host_obligation_path().is_file()
     except OSError:
         return False
 
@@ -79,38 +91,54 @@ def amend_host_obligation(**fields: Any) -> None:
     """Merge ``fields`` into the armed record (test/diagnostic surface). Never raises."""
     record = read_host_obligation()
     path = host_obligation_path()
-    if record is None or path is None:
+    if record is None:
         return
     record.update(fields)
     try:
-        from utils import atomic_json_write
-
-        atomic_json_write(path, record, mode=0o600)
+        _write_record(path, record)
     except Exception as exc:  # pragma: no cover - defensive
         logger.debug("Could not amend host update-restart obligation: %s", exc)
 
 
 def write_host_obligation(
-    *, expected_sha: str = "", runtimes: Optional[list] = None, profile: str = ""
+    *, expected_sha: str = "", runtimes: Optional[list] = None, profile: str = "", owner: str = ""
 ) -> bool:
     """Arm the host obligation. True when it was written. Never raises.
 
     Re-arming from a second profile for the SAME pulled SHA keeps the existing record (and its
     ``restarted`` proof) instead of resetting it: the host owes one restart, not one per profile.
+    ``owner`` (an update run's commit-point token) joins the record's ``owners``: a run that
+    fails before its move hands back only its own stake (``release_host_obligation``), never
+    another install's debt for the same SHA. The first owner also stores what it found there
+    (``found``), which the last owner to leave puts back.
     """
     path = host_obligation_path()
-    if path is None:
-        return False
     existing = read_host_obligation()
+    try:
+        found = _found_field(path) if owner and not _owners(existing or {}) else None
+    except OSError as exc:  # unreadable is not absent: a guessed ``found`` would delete it later
+        logger.debug("Could not read the host update-restart obligation: %s", exc)
+        return False
     if existing is not None and expected_sha and existing.get("expected_sha") == expected_sha:
         # Same pull, second profile: the host owes ONE restart, so keep the standing record (and
         # any proof that the restart already happened) rather than resetting it. A later arm that
         # carries the owed inventory still upgrades it — an inventory-less record owes no set.
-        if runtimes is None:
-            return True
+        fields: dict[str, Any] = {}
+        owners = _owners(existing)
+        if owner and owner not in owners:
+            fields["owners"] = [*owners, owner]
+            if not owners:
+                fields["found"] = found
         inventory = {"version": 1, "runtimes": runtimes}
-        if existing.get("inventory") != inventory:
-            amend_host_obligation(inventory=inventory)
+        if runtimes is not None and existing.get("inventory") != inventory:
+            fields["inventory"] = inventory
+        if not fields:
+            return True
+        try:
+            _write_record(path, {**existing, **fields})
+        except Exception as exc:  # health: allow BLE001 -- never raises: the caller falls back to the per-home marker
+            logger.debug("Could not amend host update-restart obligation: %s", exc)
+            return False
         return True
     payload: dict[str, Any] = {
         "version": _RECORD_VERSION,
@@ -119,26 +147,80 @@ def write_host_obligation(
         "armed_by_profile": profile or "",
         "expected_sha": expected_sha or "",
     }
+    if owner:
+        payload["owners"] = [owner]
+        payload["found"] = found
     if runtimes is not None:
         payload["inventory"] = {"version": 1, "runtimes": runtimes}
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        from utils import atomic_json_write
-
-        atomic_json_write(path, payload, mode=0o600)
+        _write_record(path, payload)
     except Exception as exc:
         logger.debug("Could not write host update-restart obligation: %s", exc)
         return False
     return True
 
 
-def clear_host_obligation() -> None:
-    """Discharge the obligation for the whole host. Never raises."""
+def _owners(record: dict) -> list[str]:
+    owners = record.get("owners")
+    return [str(o) for o in owners] if isinstance(owners, list) else []
+
+
+def _found_field(path: Path) -> Optional[str]:
+    """The record's current bytes (base64), ``None`` when absent: what a first owner puts back.
+    Any other read error raises: custody is never guessed."""
+    try:
+        return base64.b64encode(path.read_bytes()).decode("ascii")
+    except FileNotFoundError:
+        return None
+
+
+def release_host_obligation(owner: str) -> None:
+    """Hand back ``owner``'s stake in the record. When no other run still owes through it, the
+    record goes back to what its first owner found (``found``; absent = unlinked).
+
+    A record without ``owner`` was rewritten since (another install's newer pull): it is theirs and
+    stays. Raises OSError when the record cannot be rewritten (the caller keeps the debt armed).
+    """
+    record = read_host_obligation()
+    owners = _owners(record) if record is not None else []
+    if not owner or owner not in owners:
+        return
     path = host_obligation_path()
-    if path is None:
+    remaining = [o for o in owners if o != owner]
+    if remaining:
+        _write_record(path, {**record, "owners": remaining})
         return
     try:
+        found = base64.b64decode(record["found"], validate=True) if record.get("found") is not None else None
+    except (TypeError, ValueError):
+        return  # a damaged ``found`` cannot be put back: the debt stays armed, never guessed away
+    if found is None:
         path.unlink(missing_ok=True)
+    else:
+        _replace_bytes(path, found)
+
+
+def _replace_bytes(path: Path, data: bytes) -> None:
+    """Put ``data`` back at ``path``: a fresh ``mkstemp`` file (never through a planted alias),
+    fsynced, then renamed over the record."""
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.stem}_", suffix=".restore")
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
+
+
+def clear_host_obligation() -> None:
+    """Discharge the obligation for the whole host. Never raises."""
+    try:
+        host_obligation_path().unlink(missing_ok=True)
     except OSError as exc:
         logger.debug("Could not clear host update-restart obligation: %s", exc)
 
@@ -164,13 +246,11 @@ def mark_host_restart_completed(sha: str) -> None:
     """Record that the host process was restarted onto ``sha``. Never raises."""
     record = read_host_obligation()
     path = host_obligation_path()
-    if record is None or path is None:
+    if record is None:
         return
     record["restarted"] = {"sha": sha or "", "pid": os.getpid(), "at": time.time()}
     try:
-        from utils import atomic_json_write
-
-        atomic_json_write(path, record, mode=0o600)
+        _write_record(path, record)
     except Exception as exc:
         logger.debug("Could not stamp host restart completion: %s", exc)
 
