@@ -458,8 +458,24 @@ class _UpdateOutputStream:
         self._original = original
         self._log = log_file
         self._original_broken = False
+        # The last "✗ …" line (plus its first indented detail line): every early exit prints one
+        # before sys.exit, and the receipt boundary records it as the reason (#132089).
+        self.last_failure = ""
+        self._failure_open = False
+
+    def _note_failure(self, data) -> None:
+        for line in str(data).splitlines():
+            text = line.strip()
+            if text.startswith("✗"):
+                self.last_failure, self._failure_open = text[:300], True
+            elif text and self._failure_open:
+                if line[:1].isspace():
+                    self.last_failure = f"{self.last_failure} {text}"[:500]
+                self._failure_open = False
 
     def write(self, data):
+        with contextlib.suppress(Exception):
+            self._note_failure(data)
         # Mirror to the log file first — it's the most reliable destination.
         if self._log is not None:
             with contextlib.suppress(Exception):

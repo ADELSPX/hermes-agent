@@ -2402,7 +2402,7 @@ def _clear_bytecode_cache(root: Path) -> int:
     return removed
 
 
-def _finalize_update_receipt(code: int, reason: str) -> None:
+def _finalize_update_receipt(code: int, reason: str, detail: str = "") -> None:
     """Best-effort receipt close at the command boundary; no-op if already finalized."""
     try:
         # Receipt boundary (#91283 review): the impl has many early sys.exit paths (concurrent-instance
@@ -2411,7 +2411,7 @@ def _finalize_update_receipt(code: int, reason: str) -> None:
         # unchanged. No-op when an inner path already finalized (exactly-once by construction).
         from hermes_cli.update_receipt import finalize_pending_update_receipt
 
-        finalize_pending_update_receipt(code, reason)
+        finalize_pending_update_receipt(code, reason, detail)
     except Exception:
         pass
 
@@ -2540,7 +2540,7 @@ def cmd_update(args):
         # reach an inner finalize. Persist any still-open receipt with the real
         # exit code (no-op if already finalized), then let the exit proceed.
         _code = _update_exit.code if isinstance(_update_exit.code, int) else 1
-        _finalize_update_receipt(_code, f"sys.exit({_code})")
+        _finalize_update_receipt(_code, f"sys.exit({_code})", getattr(sys.stdout, "last_failure", ""))
         if gateway_mode and _code:
             from hermes_cli.update_cmd_fleet import _write_gateway_update_exit_code
             _write_gateway_update_exit_code(False)

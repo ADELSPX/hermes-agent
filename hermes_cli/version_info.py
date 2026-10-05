@@ -12,6 +12,7 @@ Resolution order:
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import tomllib
 from dataclasses import dataclass
@@ -220,12 +221,17 @@ def _git_version_info(repo_dir: Path, *, include_untracked: bool = False) -> Ver
         status_command = ["git", "status", "--porcelain"]
         if not include_untracked:
             status_command.append("-uno")
+        # The 3 s timeout SIGKILLs a slow status (a partial clone lazily fetching, a cold
+        # checkout), and a killed status strands the .git/index.lock it took to refresh the
+        # index: the next update's merge/stash then dies on "File exists" (#132089). A
+        # read-only probe takes no optional lock and never goes to the network.
         dirty_result = subprocess.run(
             status_command,
             capture_output=True,
             text=True, encoding="utf-8", errors="replace",
             timeout=3,
             cwd=str(repo_dir),
+            env={**os.environ, "GIT_OPTIONAL_LOCKS": "0", "GIT_NO_LAZY_FETCH": "1"},
         )
         dirty = dirty_result.returncode == 0 and bool((dirty_result.stdout or "").strip())
     except (OSError, subprocess.SubprocessError):

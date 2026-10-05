@@ -303,6 +303,24 @@ def record_gateway_restart(**kwargs: Any) -> None:
     _record("gateway_restart_result", "gateway restart result", **kwargs)
 
 
+# Steps after the snapshot that belong to the apply stage; a run that dies in one never marks it.
+_APPLY_WINDOW_STEPS = frozenset({"resolve", "fetch", "checkout", "pull", "zip"})
+
+
+def _mark_unfinished_apply(data: dict[str, Any]) -> None:
+    """Close the apply stage as failed when the run died inside it.
+
+    Without the mark, ``hermes.update.run`` reads such a run as failed_stage=apply with
+    apply_mode=unknown and ``hermes.update.stage`` never counts an apply failure at all.
+    """
+    step = data.get("current_step")
+    if step in _APPLY_WINDOW_STEPS and not any(
+            isinstance(mark, dict) and mark.get("name") == "apply" for mark in data.get("stages") or ()):
+        data.setdefault("stages", []).append({
+            "name": "apply", "outcome": "failed", "at": _utc_now_iso(),
+            "mode": "zip" if step == "zip" else "git"})
+
+
 def finalize_update_receipt(outcome: str, fleet: list | None = None, stop_reason: str = "") -> Optional[Path]:
     """Finalize + persist the receipt (``success``/``partial``/``failed``/``refused``); path or None.
 
@@ -327,6 +345,8 @@ def finalize_update_receipt(outcome: str, fleet: list | None = None, stop_reason
         # pop THIS context only, so exactly-once still holds.
         _current.set(None)
     try:
+        if outcome != "success":
+            _mark_unfinished_apply(receipt.data)
         receipt.finalize(outcome)
         if stop_reason:
             receipt.data["stop_reason"] = stop_reason
@@ -454,7 +474,8 @@ def _publish_shared_metrics(data: dict[str, Any]) -> None:
         record_update_receipt(data)
 
 
-def finalize_pending_update_receipt(exit_code: Optional[int] = None, stop_reason: str = "") -> Optional[Path]:
+def finalize_pending_update_receipt(
+        exit_code: Optional[int] = None, stop_reason: str = "", detail: str = "") -> Optional[Path]:
     """Command-boundary safety net: persist a still-open receipt, if any. Never raises.
 
     ``hermes update`` has many early ``sys.exit`` paths (preflight refusals, venv-holder refusal,
@@ -478,7 +499,7 @@ def finalize_pending_update_receipt(exit_code: Optional[int] = None, stop_reason
     if outcome != "success" and stop_reason:
         # A bare "sys.exit(1)" names no step; the exit the caller could not attribute is
         # attributed here from what the run recorded before it died (#132089).
-        stop_reason = f"{stop_reason}{exit_context()}"
+        stop_reason = f"{stop_reason}{exit_context()}" + (f": {detail}" if detail else "")
     return finalize_update_receipt(outcome, stop_reason=stop_reason)
 
 

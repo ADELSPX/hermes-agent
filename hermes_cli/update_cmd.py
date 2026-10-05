@@ -1360,6 +1360,7 @@ def _handle_update_called_process_error(
         print(f"⚠ {stage}: {e}")
         print("→ Falling back to ZIP download...")
         print()
+        _mark_current_step("zip")
         _update_via_zip(
             args, had_desktop_app_before_update=had_desktop_app_before_update,
             target_sha=target_sha, completion_request=completion_request,
@@ -1381,15 +1382,15 @@ def _handle_update_called_process_error(
             print(f"✗ {stage}.")
             print(f"  Details: {e}")
             _print_called_process_error_tail(e)
-        _finalize_receipt("failed", 'Update receipt finalize failed: %s')
+        _finalize_receipt("failed", 'Update receipt finalize failed: %s', stop_reason=f"{stage}: {e}")
         sys.exit(1)
 
 
-def _finalize_receipt(status: str, debug_message: str) -> None:
+def _finalize_receipt(status: str, debug_message: str, stop_reason: str = "") -> None:
     """Best-effort ``finalize_update_receipt(status)``; the receipt must never break an update."""
     with _best_effort(debug_message):
         from hermes_cli.update_receipt import finalize_update_receipt
-        finalize_update_receipt(status)
+        finalize_update_receipt(status, stop_reason=stop_reason)
 
 
 def _finish_already_up_to_date(
@@ -1480,6 +1481,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
     pre_update_snapshot_id = _m()._run_pre_update_backup(args)
     _record_pre_update_backup_outcome(args, pre_update_snapshot_id)
     _record_snapshot_stage(args, pre_update_snapshot_id)
+    _mark_current_step("resolve")
 
     _windows_gateway_resume = _m()._pause_windows_gateways_for_update()
     if _windows_gateway_resume:
@@ -1544,6 +1546,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
             target_ref = f"origin/{branch}"
 
     if use_zip_update:
+        _mark_current_step("zip")
         try:
             _update_via_zip(
                 args, had_desktop_app_before_update=had_desktop_app_before_update,
