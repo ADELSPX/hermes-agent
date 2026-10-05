@@ -178,8 +178,9 @@ def _claim_age_seconds(claimed_at: str) -> float:
 
 def _prune_unlocked(conn: sqlite3.Connection) -> None:
     # A terminal row survives while it is inside the global newest-N window OR inside its own
-    # job's newest-K window; only rows outside both go. Same (instant, text) recency key as the
-    # readers, so the surviving set is exactly what `hermes cron runs` would show first.
+    # job's newest-K window; only rows outside both go. Recency is finished_at first (pinned by
+    # test_recently_finished_long_running_execution_survives_retention: a long run that finished
+    # a moment ago must outlive rows claimed after it), then the readers' (claimed_at, id) key.
     conn.execute(
         """DELETE FROM executions WHERE id IN (
              SELECT id FROM (
