@@ -98,5 +98,75 @@ def test_resume_unregisters_its_own_atexit_fallback_before_running(monkeypatch):
     token = {"resume_needed": True}
     update_cmd_windows._resume_windows_gateways_after_update(token)
 
-    assert calls == [update_cmd_windows._resume_windows_gateways_after_update]
+    from hermes_cli import update_cmd
+
+    assert calls == [update_cmd_windows._resume_windows_gateways_after_update,
+                     update_cmd._resume_paused_gateways_at_exit]
     assert token["resume_needed"] is False
+
+
+def test_the_update_commands_atexit_net_reports_an_owed_resume_instead_of_raising(monkeypatch, tmp_path):
+    """R9-4: the net ``hermes update`` arms for gateways it paused (after the commit point the git
+    route's only one) records a refused resume as the ``windows_resume`` follow-up on the run's
+    finalized receipt; it never raises inside atexit."""
+    import atexit
+    from types import SimpleNamespace
+
+    from hermes_cli import update_cmd, update_receipt
+
+    class Stop(Exception):
+        pass
+
+    nets = []
+
+    def register(fn, *args, **kwargs):
+        nets.append((fn, args, kwargs))
+
+    def unregister(fn):
+        nets[:] = [net for net in nets if net[0] != fn]
+
+    def refused(resume_token):
+        raise RuntimeError("Could not restart Windows gateway service(s): HermesGatewayProbe")
+
+    def stop_after_the_request_is_built(args):
+        raise Stop
+
+    token = {"resume_needed": True, "profiles": {}, "unmapped": [], "services": ["HermesGatewayProbe"]}
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(atexit, "register", register)
+    monkeypatch.setattr(atexit, "unregister", unregister)
+    monkeypatch.setattr(hm, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(update_cmd, "_resolve_update_options", lambda args, gateway_mode: SimpleNamespace(
+        gw_input_fn=None, assume_yes=True, pre_update_version=None))
+    monkeypatch.setattr(update_cmd, "_begin_update_receipt_and_plan",
+                        lambda args: update_receipt.begin_update_receipt())
+    monkeypatch.setattr(hm, "_run_pre_update_backup", lambda args: None)
+    monkeypatch.setattr(update_cmd, "_record_pre_update_backup_outcome", lambda *a: None)
+    monkeypatch.setattr(update_cmd, "_record_snapshot_stage", lambda *a: None)
+    monkeypatch.setattr(hm, "_pause_windows_gateways_for_update", lambda: token)
+    monkeypatch.setattr(hm, "_resume_windows_gateways_after_update", refused)
+    monkeypatch.setattr(hm, "_desktop_packaged_executable", lambda d: None)
+    monkeypatch.setattr(hm, "_desktop_dist_exists", lambda d: False)
+    monkeypatch.setattr(hm, "_installed_desktop_apps", lambda: [])
+    monkeypatch.setattr(update_cmd, "_prepare_git_command", lambda: (False, ["git"], False))
+    monkeypatch.setattr(hm, "_resolve_update_branch", stop_after_the_request_is_built)
+    try:
+        with pytest.raises(Stop):
+            update_cmd._cmd_update_impl(SimpleNamespace(branch="main", yes=True), False)
+        update_receipt.finalize_pending_update_receipt(1)  # the command boundary, before atexit
+        assert update_receipt._current.get() is None
+        update_id = update_receipt.read_latest_receipt()["update_id"]
+        armed = [net for net in nets if net[1][:1] == (token,)]
+        assert len(armed) == 1, nets
+        fn, args, kwargs = armed[0]
+        escaped = None
+        try:
+            fn(*args, **kwargs)
+        except Exception as exc:  # what atexit would print as a traceback
+            escaped = exc
+        assert escaped is None, f"the atexit net raised: {escaped!r}"
+        latest = update_receipt.read_latest_receipt()
+        assert latest["update_id"] == update_id
+        assert [row["step"] for row in latest.get("followups") or []] == ["windows_resume"]
+    finally:
+        update_receipt._current.set(None)

@@ -1460,14 +1460,16 @@ def _resume_windows_gateways_after_update(token: dict | None) -> None:
     from hermes_cli.update_cmd import _m
     if not token or not token.get("resume_needed"):
         return
-    # The foreground call sites register this same function via atexit as a safety net for
-    # process death before they get a chance to run it themselves (#115563). Once execution
-    # actually reaches here — foreground or the atexit fallback itself — ownership is taken:
-    # unregister immediately so a failure below (or the foreground caller failing after this
-    # returns) cannot replay the same RuntimeError a second time at interpreter teardown.
-    # ``unregister`` is a no-op when this function was never registered.
+    # The update command arms an atexit net that calls this (historical updaters registered
+    # this function itself) for process death before the foreground runs it (#115563). Once
+    # execution actually reaches here — foreground or the atexit fallback itself — ownership is
+    # taken: unregister immediately so a failure below (or the foreground caller failing after
+    # this returns) cannot replay the same RuntimeError a second time at interpreter teardown.
+    # ``unregister`` is a no-op when nothing was registered.
     import atexit
+    from hermes_cli import update_cmd
     atexit.unregister(_resume_windows_gateways_after_update)
+    atexit.unregister(update_cmd._resume_paused_gateways_at_exit)  # the command's reporting net
     if not _m()._is_windows():
         token["resume_needed"] = False
         return

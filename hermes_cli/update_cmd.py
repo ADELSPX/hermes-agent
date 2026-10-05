@@ -761,7 +761,18 @@ def _settle_windows_resume(request: dict) -> None:
 
     atexit.unregister(_m()._resume_windows_gateways_after_update)
     atexit.unregister(update_cmd_windows._resume_windows_gateways_after_update)
+    atexit.unregister(_resume_paused_gateways_at_exit)
     request["windows_resume_settled"] = True
+
+
+def _arm_windows_resume_net(token: dict, request: dict | None) -> None:
+    """(Re)arm the atexit net for gateways this run paused: the reporting wrapper, so a resume still
+    owed at teardown becomes the ``windows_resume`` follow-up instead of raising inside atexit.
+    Any resume attempt disarms it (``_resume_windows_gateways_after_update`` unregisters it)."""
+    import atexit
+
+    atexit.unregister(_resume_paused_gateways_at_exit)
+    atexit.register(_resume_paused_gateways_at_exit, token, request)
 
 
 def _resume_paused_gateways_at_exit(token: dict | None, request: dict | None) -> None:
@@ -772,6 +783,9 @@ def _resume_paused_gateways_at_exit(token: dict | None, request: dict | None) ->
     """
     if not token or not token.get("resume_needed") or (request or {}).get("windows_resume_settled"):
         return
+    import atexit
+
+    atexit.unregister(_resume_paused_gateways_at_exit)  # the last attempt: teardown never replays it
     try:
         _m()._resume_windows_gateways_after_update(token)
     except Exception as exc:  # noqa: BLE001 — a restart failure is owed, not the update's status
@@ -1622,8 +1636,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
 
     _windows_gateway_resume = _m()._pause_windows_gateways_for_update()
     if _windows_gateway_resume:
-        import atexit as _atexit
-        _atexit.register(_m()._resume_windows_gateways_after_update, _windows_gateway_resume)
+        _arm_windows_resume_net(_windows_gateway_resume, None)
 
 
     desktop_dir = _m().PROJECT_ROOT / "apps" / "desktop"
@@ -1639,6 +1652,8 @@ def _cmd_update_impl(args, gateway_mode: bool):
     completion_request = _source_completion_request(
         opts, _pre_update_plan, pre_update_snapshot_id, _windows_gateway_resume,
         had_desktop_app_before_update, gateway_mode)
+    if _windows_gateway_resume:  # from here the net can amend this run's finalized receipt
+        _arm_windows_resume_net(_windows_gateway_resume, completion_request)
     branch = _m()._resolve_update_branch(args)
     completion_request["branch"] = branch
     target_ref = f"origin/{branch}"
