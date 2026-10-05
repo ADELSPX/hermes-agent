@@ -11,7 +11,6 @@ import copy
 import json
 import logging
 import os
-import re
 import threading
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
@@ -322,12 +321,15 @@ def _msg_text(m: Dict) -> str:
     return c.strip() if isinstance(c, str) else ""
 
 
-_SKILL_INVOKED_RE = re.compile(r'has invoked the "([^"]+)" skill')
 _MAX_ELIGIBILITY_ROWS = 20
 
 
 def _consulted_skill_names(messages_snapshot: List[Dict]) -> List[str]:
-    """Skills the conversation loaded: ``skill_view(name=…)`` calls plus ``/skill`` invocation markers."""
+    """Skills the conversation loaded: ``skill_view(name=…)`` calls plus every skill-scaffold
+    header in a user turn (single ``/skill``, stacked bundle, gateway channel auto-load,
+    ``skills.auto_load``), read with the scaffold markers' own parser."""
+    from agent.skill_commands import scaffold_skill_names
+
     names: List[str] = []
     for m in messages_snapshot:
         if m.get("role") == "assistant":
@@ -342,18 +344,22 @@ def _consulted_skill_names(messages_snapshot: List[Dict]) -> List[str]:
                 if isinstance(args, dict) and isinstance(args.get("name"), str):
                     names.append(args["name"])
         elif m.get("role") == "user":
-            names.extend(_SKILL_INVOKED_RE.findall(_msg_text(m)))
+            names.extend(scaffold_skill_names(_msg_text(m)))
     return list(dict.fromkeys(n.strip() for n in names if n.strip()))
 
 
-def _skill_write_eligibility_block(messages_snapshot: List[Dict]) -> str:
+def _skill_write_eligibility_block(messages_snapshot: List[Dict], review_skills: bool = True) -> str:
     """Pre-checked write eligibility of the consulted skills, for the review prompt.
 
     The prompt already says protected skills are off-limits, but the fork cannot tell which of the
     skills it just used are pinned or user-owned, so it drafts the patch and learns from the refusal:
     81% of reviews on one install hit at least one refused write (76 of 106 on the pinned skill in
     play) and cost 2.2x the calls of a clean review. Naming the verdict up front removes the probe.
-    Best-effort: any lookup failure yields an empty block and the guard still enforces the policy."""
+    Best-effort: any lookup failure yields an empty block and the guard still enforces the policy.
+    A memory-only review (``review_skills`` False) gets nothing: its prompt has no skill options
+    and skill_manage is not on its whitelist, so the block would point at a guaranteed denial."""
+    if not review_skills:
+        return ""
     names = _consulted_skill_names(messages_snapshot)[:_MAX_ELIGIBILITY_ROWS]
     if not names:
         return ""
@@ -1222,7 +1228,7 @@ def _release_fork_clients(review_agent: Any) -> None:
 def _run_review_fork(
     agent: Any, messages_snapshot: List[Dict], prompt: str, task_cfg: Optional[Dict[str, Any]],
     review_run: Optional[_BackgroundReviewRun], st: _ReviewForkState, review_memory: bool = False,
-    explicit: bool = False,
+    explicit: bool = False, review_skills: bool = True,
 ) -> None:
     """Fork phase (inside thread-scoped silence): build the fork, run the prompt under the tool
     whitelist, snapshot its messages/usage, release its clients. Partial progress lands on ``st``
@@ -1263,7 +1269,7 @@ def _run_review_fork(
                     prompt + "\n\nYou can only call " + memory_phrase_prompt +
                     "management tools. Other tools will be denied "
                     "at runtime — do not attempt them." + prompt_extra
-                    + _skill_write_eligibility_block(messages_snapshot)
+                    + _skill_write_eligibility_block(messages_snapshot, review_skills)
                 ),
                 conversation_history=_digest_history(messages_snapshot) if _routed else messages_snapshot,
             )
@@ -1295,7 +1301,7 @@ def _publish_review_summary(agent: Any, actions: List[str]) -> None:
 def _run_review_in_thread(
     agent: Any, messages_snapshot: List[Dict], prompt: str,
     task_cfg: Optional[Dict[str, Any]] = None, review_run: Optional[_BackgroundReviewRun] = None,
-    review_memory: bool = False, explicit: bool = False,
+    review_memory: bool = False, explicit: bool = False, review_skills: bool = True,
 ) -> None:
     """Daemon-thread worker: build the fork, run the prompt, surface the action summary via
     ``agent._safe_print`` / ``background_review_callback``. ``review_run`` (from
@@ -1330,7 +1336,9 @@ def _run_review_in_thread(
         # their console output (#55769 / #55925). ``thread_scoped_silence`` routes only this thread's writes
         # to devnull and leaves all other threads on the real streams.
         with thread_scoped_silence():
-            _run_review_fork(agent, messages_snapshot, prompt, task_cfg, review_run, st, review_memory, explicit)
+            _run_review_fork(
+                agent, messages_snapshot, prompt, task_cfg, review_run, st, review_memory, explicit,
+                review_skills=review_skills)
         # A buggy/legacy tool response shape must NOT take down the whole review (the outer
         # except would discard every action the fork DID complete), so coerce to an empty list.
         try:
@@ -1409,7 +1417,10 @@ def spawn_background_review_thread(
     def _target() -> None:  # resolves _run_review_in_thread at call time (tests patch it)
         _run_review_in_thread(
             agent, messages_snapshot, prompt, task_cfg=task_cfg, review_run=review_run,
-            review_memory=review_memory, explicit=explicit)
+            review_memory=review_memory, explicit=explicit,
+            # Skills-only is the default scope (see _PROMPT_NAME_BY_SCOPE): only a memory-only
+            # review has no skill options for the eligibility block to point at.
+            review_skills=review_skills or not review_memory)
 
     return _target, prompt
 

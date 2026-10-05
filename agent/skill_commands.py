@@ -76,6 +76,27 @@ AUTO_LOAD_SCAFFOLD_SQL_LIKE = _AUTO_LOAD_PREFIX + "%"
 # message; ``describe_skill_invocation`` cuts there rather than show the body.
 SKILL_EXCERPT_JOINT = "\x1e"
 
+# Every skill-activation header a user turn can carry, anchored on the markers above so a header
+# quoted inside a skill body (an example scaffold) is not mistaken for an activation. The bundle
+# header names a typed string (``"/clean /work"``), so its skills come from the ``Skills loaded:``
+# roll-call line; the three single-skill shapes name the skill in the header itself.
+_SKILL_INVOKED_HEADER_RE = re.compile(re.escape(_SKILL_INVOCATION_PREFIX) + r'"([^"]+)" skill,')
+_AUTO_LOADED_HEADER_RE = re.compile(re.escape(_AUTO_LOAD_PREFIX) + r'([^"]+)" skill is auto-loaded')
+_BUNDLE_ROLL_CALL_RE = re.compile(r"^Skills loaded: (.+)$", re.MULTILINE)
+
+
+def scaffold_skill_names(content: Any) -> list[str]:
+    """Skill names activated by the scaffolds in one user turn, in order, deduplicated:
+    single ``/skill`` and cron invocations, stacked bundles (``/a /b``), the gateway channel
+    auto-load and ``skills.auto_load``. ``[]`` for plain text."""
+    if not isinstance(content, str):
+        return []
+    names = _SKILL_INVOKED_HEADER_RE.findall(content) + _AUTO_LOADED_HEADER_RE.findall(content)
+    if _BUNDLE_MARKER in content:
+        for roll_call in _BUNDLE_ROLL_CALL_RE.findall(content):
+            names.extend(part.strip() for part in roll_call.split(","))
+    return list(dict.fromkeys(n for n in names if n))
+
 
 
 def slugify_skill_name(name: str) -> str:

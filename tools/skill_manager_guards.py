@@ -184,22 +184,22 @@ def background_write_eligibility(names: "list[str]") -> "list[tuple[str, Optiona
     for name in names:
         existing = _smt._find_skill(name)
         refusal = background_write_refusal(name, existing["path"], "patch") if existing else None
-        rows.append((name, _blocked_label(refusal["error"]) if refusal else None))
+        rows.append((name, _BLOCKED_LABELS[refusal["reason"]] if refusal else None))
     return rows
 
 
-def _blocked_label(message: str) -> str:
-    for needle, label in (
-        ("pinned skill", "pinned"),
-        ("external_dirs", "externally owned (skills.external_dirs)"),
-        ("protected built-in", "protected built-in"),
-        ("hub-installed", "hub-installed"),
-        ("bundled", "bundled"),
-        ("not curator-managed", "not curator-managed; user-owned, `hermes curator adopt` opts it in"),
-    ):
-        if needle in message:
-            return label
-    return "ownership could not be verified"
+# Structured refusal reason -> the label the review prompt shows. The reason rides on the refusal
+# dict (``reason=``) because the human-readable message interpolates the skill NAME, and a name
+# like ``bundled-cookbook`` would otherwise be read back as the wrong (and more permissive) verdict.
+_BLOCKED_LABELS = {
+    "pinned": "pinned",
+    "external": "externally owned (skills.external_dirs)",
+    "protected built-in": "protected built-in",
+    "hub-installed": "hub-installed",
+    "bundled": "bundled",
+    "not_curator_managed": "not curator-managed; user-owned, `hermes curator adopt` opts it in",
+    "unverified": "ownership could not be verified",
+}
 
 
 def background_write_refusal(
@@ -211,13 +211,13 @@ def background_write_refusal(
         return _refusal(
             f"{refuse} pinned skill '{name}': pinned skills "
             f"are off-limits to autonomous maintenance. Ask the user to run `hermes curator "
-            f"unpin {name}` if they want it changed.")
+            f"unpin {name}` if they want it changed.", reason="pinned")
     try:
         from agent.skill_utils import is_external_skill_path
         if is_external_skill_path(skill_dir):
             return _refusal(
                 f"{refuse} skill '{name}': the skill lives in skills.external_dirs, which are "
-                f"externally owned and read-only to autonomous curation.")
+                f"externally owned and read-only to autonomous curation.", reason="external")
     except Exception:
         logger.debug("external skill guard lookup failed for %s", name, exc_info=True)
     try:
@@ -227,7 +227,7 @@ def background_write_refusal(
             (skill_usage.is_hub_installed, "hub-installed"),
             (skill_usage.is_bundled, "bundled")):
             if predicate(name):
-                return _refusal(f"{refuse} {label} skill '{name}'.")
+                return _refusal(f"{refuse} {label} skill '{name}'.", reason=label)
         # Not curator-managed (no `created_by: "agent"`) => user-owned. A MISSING
         # record and an explicit `created_by: null` must resolve IDENTICALLY (keying
         # on presence made the policy depend on the guard's own side effect: the
@@ -247,12 +247,12 @@ def background_write_refusal(
             return _refusal(
                 f"{refuse} skill '{name}': the skill is not "
                 f"curator-managed ({_detail}). User-owned skills are off-limits to autonomous "
-                f"curation. Run `hermes curator adopt {name}` to opt it in.")
+                f"curation. Run `hermes curator adopt {name}` to opt it in.", reason="not_curator_managed")
     except Exception:
         logger.warning("owned skill guard lookup failed for %s", name, exc_info=True)
         return _refusal(
             f"{refuse} skill '{name}': agent ownership could not "
-            f"be verified because the provenance record is unavailable or unreadable.")
+            f"be verified because the provenance record is unavailable or unreadable.", reason="unverified")
     return None
 
 
