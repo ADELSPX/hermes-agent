@@ -302,6 +302,20 @@ def _entry_record(abs_path: str) -> dict:
     return {"kind": "other"}
 
 
+def _record(rel: str, abs_path: str) -> dict:
+    """``_entry_record`` that names the entry when a read fails.
+
+    An OSError from a read on an already-open handle carries no filename
+    (a Windows byte-range lock surfaces as a bare ``[Errno 13] Permission
+    denied``), which leaves the caller unable to tell which file broke the
+    scan. Still fail-closed: the error propagates, the file is never skipped.
+    """
+    try:
+        return _entry_record(abs_path)
+    except OSError as exc:
+        raise ScanError(f"{rel}: {exc}") from exc
+
+
 def _walk_root(home: str, root_rel: str, *, profiles: bool, judged: bool):
     """Yield (rel_path, abs_path, judged) for every entry under a root, pruning
     the trees owned elsewhere (plugins).
@@ -362,7 +376,7 @@ def snapshot_home(home: str, profiles_dir: str | None = None) -> dict:
 
     for rel_root, profiles, judged in targets:
         for rel, abs_path, entry_judged in _walk_root(home, rel_root, profiles=profiles, judged=judged):
-            (entries if entry_judged else advisory)[rel] = _entry_record(abs_path)
+            (entries if entry_judged else advisory)[rel] = _record(rel, abs_path)
 
     # Profiles may live somewhere else entirely (a test harness override).
     if profiles_dir and os.path.abspath(profiles_dir) != os.path.join(home, PROFILES_DIR):
@@ -372,13 +386,14 @@ def snapshot_home(home: str, profiles_dir: str | None = None) -> dict:
             for name in sorted(os.listdir(override_abs)):
                 abs_path = os.path.join(override_abs, name)
                 rel = f"{PROFILES_DIR}/{name}"
-                entries[rel] = _entry_record(abs_path)
+                entries[rel] = _record(rel, abs_path)
                 if os.path.isdir(abs_path) and not _is_link(abs_path):
                     for sub_rel, sub_abs, sub_judged in _walk_root(
                             override_abs, name, profiles=True, judged=True):
                         if sub_rel == name:
                             continue
-                        (entries if sub_judged else advisory)[f"{PROFILES_DIR}/{sub_rel}"] = _entry_record(sub_abs)
+                        sub_key = f"{PROFILES_DIR}/{sub_rel}"
+                        (entries if sub_judged else advisory)[sub_key] = _record(sub_key, sub_abs)
 
     return {
         "schema": SCHEMA_VERSION,

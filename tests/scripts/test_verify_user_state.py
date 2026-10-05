@@ -491,3 +491,44 @@ def test_a_retired_var_removed_outright_still_fails(tmp_path):
 
     assert report["ok"] is False
     assert report["modified"][".env"]["key_diff"]["keys_removed"] == ["LLM_MODEL"]
+
+
+def test_a_read_error_without_a_filename_names_the_entry_and_still_fails(tmp_path, monkeypatch, capsys):
+    """A Windows byte-range lock fails the READ on an open handle, and that
+    OSError carries no filename -- `verify failed: [Errno 13] Permission denied`
+    left the locked file unknowable (install-e2e run 37238100298). The error must
+    name the entry and stay fatal (exit 2), never skip the file."""
+    home = _home(tmp_path)
+    snap = tmp_path / "snap.json"
+    assert vus.main(["snapshot", "--home", str(home), "--out", str(snap)]) == 0
+    locked = os.path.abspath(str(home / "memories" / "note.md"))
+    real_open = open
+
+    class _LockedHandle:
+        def __init__(self, handle):
+            self._handle = handle
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            self._handle.close()
+            return False
+
+        def read(self, *args):
+            raise PermissionError(13, "Permission denied")  # no filename, as on Windows
+
+    def _open(path, *args, **kwargs):
+        handle = real_open(path, *args, **kwargs)
+        if os.path.abspath(str(path)) == locked:
+            return _LockedHandle(handle)
+        return handle
+
+    monkeypatch.setattr(vus, "open", _open, raising=False)
+    capsys.readouterr()
+
+    rc = vus.main(["verify", "--home", str(home), "--snapshot", str(snap)])
+
+    err = capsys.readouterr().err
+    assert rc == 2, err
+    assert "verify failed: memories/note.md: [Errno 13] Permission denied" in err
