@@ -764,7 +764,7 @@ def _resume_paused_gateways_at_exit(token: dict | None, request: dict | None) ->
         return
     try:
         _m()._resume_windows_gateways_after_update(token)
-    except Exception as exc:  # noqa: BLE001 — a restart failure is owed, not the update's status
+    except Exception as exc:  # health: allow BLE001 -- a restart failure is owed, not the update's status
         from hermes_cli.update_receipt import _current, amend_terminal_followup, record_followup
 
         reason = f"Windows gateway recovery failed: {exc}"
@@ -808,7 +808,7 @@ def _complete_source_update(request: dict | None) -> None:
         # Dependencies owed (A6): the bootstrap child cannot resume paused gateways; this process can.
         try:
             _m()._resume_windows_gateways_after_update(token)
-        except Exception as exc:  # noqa: BLE001 — the code is committed (C3)
+        except Exception as exc:  # health: allow BLE001 -- the code is committed (C3)
             from hermes_cli.update_receipt import amend_terminal_followup, record_followup
 
             reason = f"Windows gateway recovery failed: {exc}"
@@ -824,7 +824,7 @@ def _complete_source_update(request: dict | None) -> None:
     try:
         if adopt_retired_channel(request):
             print(f"→ Source subscription moved to {request['channel_retirement']['destination']}")
-    except Exception as exc:  # noqa: BLE001 — the code is committed (C3); the next update re-adopts
+    except Exception as exc:  # health: allow BLE001 -- the code is committed (C3); the next update re-adopts
         from hermes_cli.update_receipt import amend_terminal_followup, record_followup
 
         reason = str(exc) or type(exc).__name__
