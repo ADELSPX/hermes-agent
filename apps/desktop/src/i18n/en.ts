@@ -525,7 +525,11 @@ export const en: Translations = {
         "The leftover update process may still be changing Hermes' files. Starting now can load a half-updated install, which may not work until you run the update again. Hermes records this choice in its log and leaves the update marker in place.",
       confirmKeepWaiting: 'Keep waiting',
       confirmStart: 'Start anyway',
-      startAnywayRefused: 'What holds the install changed before Hermes could start. Review it and try again.'
+      startAnywayRefused: 'What holds the install changed before Hermes could start. Review it and try again.',
+      backgroundTitle: 'A background Hermes process is waiting for an update',
+      backgroundDescription:
+        "Hermes is running. A profile backend it needed hasn't started because an earlier update may still be changing Hermes' files. It starts by itself as soon as the hold ends.",
+      backgroundConfirmTitle: 'Start the background process while the update still holds it?'
     }
   },
 

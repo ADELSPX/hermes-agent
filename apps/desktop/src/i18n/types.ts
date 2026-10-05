@@ -549,6 +549,10 @@ export interface Translations {
       confirmKeepWaiting: string
       confirmStart: string
       startAnywayRefused: string
+      // A pool/profile backend meets the hold while Hermes is already running (R9-6).
+      backgroundTitle: string
+      backgroundDescription: string
+      backgroundConfirmTitle: string
     }
   }
 

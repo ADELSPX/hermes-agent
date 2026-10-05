@@ -539,7 +539,11 @@ export const esOverrides = {
       confirmKeepWaiting: 'Seguir esperando',
       confirmStart: 'Iniciar de todos modos',
       startAnywayRefused:
-        'Lo que retiene la instalación cambió antes de que Hermes pudiera iniciar. Revísalo e inténtalo de nuevo.'
+        'Lo que retiene la instalación cambió antes de que Hermes pudiera iniciar. Revísalo e inténtalo de nuevo.',
+      backgroundTitle: 'Un proceso de Hermes en segundo plano está esperando una actualización',
+      backgroundDescription:
+        'Hermes está en marcha. Un backend de perfil que necesitaba no se ha iniciado porque una actualización anterior puede seguir cambiando los archivos de Hermes. Se iniciará solo en cuanto termine el bloqueo.',
+      backgroundConfirmTitle: '¿Iniciar el proceso en segundo plano aunque la actualización aún lo bloquea?'
     }
   },
   notifications: {

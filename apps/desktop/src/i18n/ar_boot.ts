@@ -52,6 +52,12 @@ export const arBoot = {
       signInToRemoteGateway: 'تسجيل الدخول للبوابة البعيدة',
       signInWithProvider: provider => `تسجيل الدخول عبر ${provider}`,
       identityProvider: 'مزود الهوية'
+    },
+    updateHold: {
+      backgroundTitle: 'عملية Hermes في الخلفية تنتظر اكتمال تحديث',
+      backgroundDescription:
+        'يعمل Hermes. لم تبدأ واجهة الملف الشخصي الخلفية التي يحتاجها لأن تحديثًا سابقًا ربما لا يزال يغيّر ملفات Hermes. ستبدأ تلقائيًا فور انتهاء الحجز.',
+      backgroundConfirmTitle: 'هل تريد تشغيل عملية الخلفية بينما لا يزال التحديث يحجزها؟'
     }
   },
   remoteDisplayBanner: {

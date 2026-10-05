@@ -228,6 +228,12 @@ export const zh = defineLocale({
       signInToRemoteGateway: '登录远程网关',
       signInWithProvider: provider => `使用 ${provider} 登录`,
       identityProvider: '你的身份提供方'
+    },
+    updateHold: {
+      backgroundTitle: '一个 Hermes 后台进程正在等待更新完成',
+      backgroundDescription:
+        'Hermes 正在运行。所需的配置文件后端尚未启动，因为之前的更新可能仍在修改 Hermes 的文件。占用解除后它会自动启动。',
+      backgroundConfirmTitle: '在更新仍占用时启动后台进程？'
     }
   },
 

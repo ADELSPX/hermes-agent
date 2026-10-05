@@ -607,7 +607,8 @@ import {
   PRIMARY_HOLD_OWNER,
   requestHoldRecheck,
   startAnywayLogLine,
-  UpdateHoldBoard
+  UpdateHoldBoard,
+  type UpdateHoldScope
 } from './update-marker-gate'
 import { updateConnectionsBeforeLocal } from './update-order'
 import {
@@ -3105,6 +3106,9 @@ interface UpdateHoldWire {
   since: number
   checkedAt: number
   logPath: string
+  // `background`: only a pool/profile backend is blocked while Hermes runs;
+  // the renderer shows a non-blocking banner instead of the boot screen (R9-6).
+  scope: UpdateHoldScope
 }
 
 // The hold the boot screen currently shows; the IPC handlers below act on it
@@ -3114,14 +3118,15 @@ let currentUpdateHold: HeldState | null = null
 // backend (R8 M6). The screen shows the primary's, else the first pool one.
 const updateHoldBoard = new UpdateHoldBoard()
 
-function updateHoldWire(state: HeldState): UpdateHoldWire {
+function updateHoldWire(state: HeldState, scope: UpdateHoldScope): UpdateHoldWire {
   return {
     holdId: state.holdId,
     verdict: state.verdict === 'live' ? 'held' : state.verdict,
     ownerPid: state.ownerPid,
     since: state.since,
     checkedAt: state.checkedAt,
-    logPath: path.join(HERMES_HOME, 'logs', 'update.log')
+    logPath: path.join(HERMES_HOME, 'logs', 'update.log'),
+    scope
   }
 }
 
@@ -3152,8 +3157,14 @@ function showUpdateHold(state: HeldState, owner = PRIMARY_HOLD_OWNER) {
 function renderUpdateHold(state: HeldState, bootPhase: boolean) {
   const previous = currentUpdateHold
   const sameHold = previous?.holdId === state.holdId && previous.verdict === state.verdict
+  const scope = updateHoldBoard.shownScope() ?? 'startup'
 
-  if (sameHold && previous.checkedAt === state.checkedAt && bootProgressState.updateHold) {
+  if (
+    sameHold &&
+    previous.checkedAt === state.checkedAt &&
+    bootProgressState.updateHold &&
+    bootProgressState.updateHold.scope === scope
+  ) {
     return
   }
 
@@ -3168,7 +3179,7 @@ function renderUpdateHold(state: HeldState, bootPhase: boolean) {
   currentUpdateHold = state
 
   if (!bootPhase) {
-    updateBootProgress({ updateHold: updateHoldWire(state) })
+    updateBootProgress({ updateHold: updateHoldWire(state, scope) })
 
     return
   }
@@ -3181,7 +3192,7 @@ function renderUpdateHold(state: HeldState, bootPhase: boolean) {
     progress: 12,
     running: true,
     error: null,
-    updateHold: updateHoldWire(state)
+    updateHold: updateHoldWire(state, scope)
   })
 }
 

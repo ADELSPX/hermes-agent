@@ -55,6 +55,12 @@ export const zhHantBoot = {
       signInToRemoteGateway: '登入遠端閘道',
       signInWithProvider: provider => `使用 ${provider} 登入`,
       identityProvider: '您的身分提供方'
+    },
+    updateHold: {
+      backgroundTitle: '一個 Hermes 背景程序正在等待更新完成',
+      backgroundDescription:
+        'Hermes 正在執行。所需的設定檔後端尚未啟動，因為先前的更新可能仍在修改 Hermes 的檔案。佔用解除後它會自動啟動。',
+      backgroundConfirmTitle: '在更新仍佔用時啟動背景程序？'
     }
   },
 

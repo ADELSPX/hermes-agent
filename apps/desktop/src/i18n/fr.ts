@@ -540,7 +540,11 @@ export const frOverrides = {
       confirmKeepWaiting: 'Continuer à attendre',
       confirmStart: 'Démarrer quand même',
       startAnywayRefused:
-        "Ce qui bloque l'installation a changé avant que Hermes puisse démarrer. Vérifiez et réessayez."
+        "Ce qui bloque l'installation a changé avant que Hermes puisse démarrer. Vérifiez et réessayez.",
+      backgroundTitle: 'Un processus Hermes en arrière-plan attend une mise à jour',
+      backgroundDescription:
+        "Hermes fonctionne. Un backend de profil dont il avait besoin n'a pas démarré, car une mise à jour précédente modifie peut-être encore les fichiers de Hermes. Il démarre tout seul dès que le blocage prend fin.",
+      backgroundConfirmTitle: 'Démarrer le processus en arrière-plan alors que la mise à jour le bloque encore ?'
     }
   },
   notifications: {

@@ -203,6 +203,12 @@ export const ru = defineLocale({
       signInToRemoteGateway: 'Войти в удалённый шлюз',
       signInWithProvider: provider => `Войти через ${provider}`,
       identityProvider: 'вашему провайдеру аутентификации'
+    },
+    updateHold: {
+      backgroundTitle: 'Фоновый процесс Hermes ждёт завершения обновления',
+      backgroundDescription:
+        'Hermes работает. Нужный бэкенд профиля не запущен: предыдущее обновление, возможно, ещё изменяет файлы Hermes. Он запустится сам, как только блокировка снимется.',
+      backgroundConfirmTitle: 'Запустить фоновый процесс, пока обновление ещё удерживает установку?'
     }
   },
   notifications: {

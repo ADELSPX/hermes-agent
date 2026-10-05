@@ -539,7 +539,11 @@ export const deOverrides = {
       confirmKeepWaiting: 'Weiter warten',
       confirmStart: 'Trotzdem starten',
       startAnywayRefused:
-        'Was die Installation festhält, hat sich geändert, bevor Hermes starten konnte. Bitte erneut prüfen.'
+        'Was die Installation festhält, hat sich geändert, bevor Hermes starten konnte. Bitte erneut prüfen.',
+      backgroundTitle: 'Ein Hermes-Hintergrundprozess wartet auf ein Update',
+      backgroundDescription:
+        'Hermes läuft. Ein benötigtes Profil-Backend wurde nicht gestartet, weil ein früheres Update die Dateien von Hermes womöglich noch ändert. Es startet von selbst, sobald die Sperre endet.',
+      backgroundConfirmTitle: 'Den Hintergrundprozess starten, obwohl das Update ihn noch blockiert?'
     }
   },
   notifications: {

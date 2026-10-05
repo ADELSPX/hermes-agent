@@ -19,6 +19,10 @@ const formatTime = (ms: number) =>
  * the install and can check again or quit; the only way through while the
  * hold lasts is an explicit, confirmed Start anyway that main logs. Main
  * starts the backend by itself as soon as the hold ends.
+ *
+ * A hold only a pool/profile backend meets while Hermes is already running
+ * (`scope: 'background'`, review R9-6) is a non-blocking banner instead: the
+ * working app stays usable, and Check again / Start anyway act on that hold.
  */
 export function UpdateHoldOverlay() {
   const boot = useStore($desktopBoot)
@@ -80,6 +84,75 @@ export function UpdateHoldOverlay() {
 
   const openLogs = () => void window.hermesDesktop?.revealLogs().catch(() => undefined)
 
+  const detail = unverified ? copy.unverified : hold.ownerPid ? copy.heldByProcess(hold.ownerPid) : copy.heldUnknown
+  const times = `${copy.since(formatTime(hold.since))} · ${copy.lastChecked(formatTime(hold.checkedAt))}`
+
+  const confirmButtons = (
+    <div className="flex flex-wrap gap-2">
+      <Button disabled={Boolean(busy)} onClick={() => setConfirming(false)} variant="secondary">
+        {copy.confirmKeepWaiting}
+      </Button>
+      <Button disabled={Boolean(busy)} onClick={() => void startAnyway()} variant="destructive">
+        {busy === 'start' ? <Loader2 className="animate-spin" /> : null}
+        {copy.confirmStart}
+      </Button>
+    </div>
+  )
+
+  const askStartAnyway = () => {
+    setRefused(false)
+    setConfirming(true)
+  }
+
+  if (hold.scope === 'background') {
+    return (
+      <section
+        aria-labelledby={titleId}
+        className="fixed top-[calc(var(--titlebar-height,34px)+0.75rem)] right-4 z-(--z-over-modal) w-[min(24rem,calc(100vw-2rem))] overflow-hidden rounded-xl border border-amber-500/30 bg-(--ui-chat-bubble-background) shadow-nous"
+        data-testid="update-hold-banner"
+        role="region"
+      >
+        <div className="flex items-start gap-3 px-4 pt-3">
+          <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-500" />
+          <div className="min-w-0">
+            <h2 className="text-[0.8125rem] font-semibold tracking-tight" id={titleId}>
+              {confirming ? copy.backgroundConfirmTitle : copy.backgroundTitle}
+            </h2>
+            <p className="mt-1 text-xs leading-5 text-(--ui-text-tertiary)">
+              {confirming ? copy.confirmBody : copy.backgroundDescription}
+            </p>
+            {confirming ? null : (
+              <p className="mt-1 text-xs text-muted-foreground" data-testid="update-hold-detail">
+                {detail} {times}
+              </p>
+            )}
+          </div>
+        </div>
+
+        <div className="grid gap-2 px-4 py-3">
+          {refused ? <p className="text-xs text-destructive">{copy.startAnywayRefused}</p> : null}
+          {confirming ? (
+            confirmButtons
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              <Button disabled={Boolean(busy)} onClick={() => void recheck()} size="sm">
+                {busy === 'recheck' ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+                {copy.checkAgain}
+              </Button>
+              <Button onClick={openLogs} size="sm" variant="ghost">
+                <FileText />
+                {copy.openLogs}
+              </Button>
+              <Button className="ml-auto" disabled={Boolean(busy)} onClick={askStartAnyway} size="sm" variant="ghost">
+                {copy.startAnyway}
+              </Button>
+            </div>
+          )}
+        </div>
+      </section>
+    )
+  }
+
   return (
     <div
       aria-labelledby={titleId}
@@ -109,24 +182,14 @@ export function UpdateHoldOverlay() {
             className="rounded-2xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-xs text-(--ui-text-secondary)"
             data-testid="update-hold-detail"
           >
-            <p>{unverified ? copy.unverified : hold.ownerPid ? copy.heldByProcess(hold.ownerPid) : copy.heldUnknown}</p>
-            <p className="mt-1 text-muted-foreground">
-              {copy.since(formatTime(hold.since))} · {copy.lastChecked(formatTime(hold.checkedAt))}
-            </p>
+            <p>{detail}</p>
+            <p className="mt-1 text-muted-foreground">{times}</p>
           </div>
 
           {refused ? <p className="text-xs text-destructive">{copy.startAnywayRefused}</p> : null}
 
           {confirming ? (
-            <div className="flex flex-wrap gap-2">
-              <Button disabled={Boolean(busy)} onClick={() => setConfirming(false)} variant="secondary">
-                {copy.confirmKeepWaiting}
-              </Button>
-              <Button disabled={Boolean(busy)} onClick={() => void startAnyway()} variant="destructive">
-                {busy === 'start' ? <Loader2 className="animate-spin" /> : null}
-                {copy.confirmStart}
-              </Button>
-            </div>
+            confirmButtons
           ) : (
             <div className="grid gap-2">
               <div className="flex flex-wrap gap-2">
@@ -142,15 +205,7 @@ export function UpdateHoldOverlay() {
                   <FileText />
                   {copy.openLogs}
                 </Button>
-                <Button
-                  className="ml-auto"
-                  disabled={Boolean(busy)}
-                  onClick={() => {
-                    setRefused(false)
-                    setConfirming(true)
-                  }}
-                  variant="ghost"
-                >
+                <Button className="ml-auto" disabled={Boolean(busy)} onClick={askStartAnyway} variant="ghost">
                   {copy.startAnyway}
                 </Button>
               </div>

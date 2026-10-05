@@ -1411,6 +1411,8 @@ export interface DesktopUpdateHold {
   /** Epoch ms of the latest check. */
   checkedAt: number
   logPath: string
+  /** `background`: only a pool/profile backend is held while Hermes runs (a non-blocking banner). Absent = startup. */
+  scope?: 'startup' | 'background'
 }
 
 // First-launch install ("bootstrap") event types -- emitted by

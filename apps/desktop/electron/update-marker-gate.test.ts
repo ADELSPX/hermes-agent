@@ -327,6 +327,30 @@ test("a pool/profile hold reaches the screen when the primary shows none; the pr
   assert.equal(board.shown(), null)
 })
 
+test('a pool/profile hold while Hermes runs is presented as background, the primary boot hold as startup (R9-6)', () => {
+  const state: HeldState = {
+    verdict: 'held',
+    ownerPid: 7,
+    livePid: null,
+    holdId: 'p',
+    since: 1,
+    checkedAt: 2,
+    blocking: true
+  }
+
+  // Optional call: on a board without scopes this is an assertion failure, not a crash.
+  const scope = (board: UpdateHoldBoard) => (board as { shownScope?: () => unknown }).shownScope?.()
+  const board = new UpdateHoldBoard()
+  board.set('pool:work', state)
+  assert.equal(scope(board), 'background', 'only a background backend is blocked: never the boot screen')
+  board.set(PRIMARY_HOLD_OWNER, { ...state, holdId: 'm' })
+  assert.equal(scope(board), 'startup', 'the primary boot wait is blocked: the full-screen boot screen')
+  board.clear(PRIMARY_HOLD_OWNER)
+  assert.equal(scope(board), 'background', 'the primary booted; the pool hold drops to the banner')
+  board.clear('pool:work')
+  assert.equal(scope(board), null)
+})
+
 test('without a protocol-2 script the gate judges dead = not running and deletes nothing', async () => {
   const home = tmpHome('gate-legacy')
   const body = `${await deadPid()}\n${minutesAgo(1)}\n`

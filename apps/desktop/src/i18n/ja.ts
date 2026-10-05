@@ -202,6 +202,12 @@ export const ja = defineLocale({
       signInToRemoteGateway: 'リモートゲートウェイにサインイン',
       signInWithProvider: provider => `${provider} でサインイン`,
       identityProvider: 'ID プロバイダー'
+    },
+    updateHold: {
+      backgroundTitle: 'バックグラウンドの Hermes プロセスがアップデートを待っています',
+      backgroundDescription:
+        'Hermes は動作中です。以前のアップデートがまだ Hermes のファイルを変更している可能性があるため、必要なプロファイルのバックエンドが起動していません。保留が解除されると自動的に起動します。',
+      backgroundConfirmTitle: 'アップデートが保留中のまま、バックグラウンドプロセスを起動しますか？'
     }
   },
 

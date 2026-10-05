@@ -136,6 +136,14 @@ export function markerHoldId(raw: Buffer, file?: { ino: number; mtimeMs: number 
  */
 export const PRIMARY_HOLD_OWNER = 'primary'
 
+/**
+ * How the shown hold is presented (review R9-6): `startup` while the primary
+ * boot wait is blocked (the full-screen blocked boot screen); `background`
+ * when only a pool/profile backend is (Hermes is running: a non-blocking
+ * banner, never a mask over the working app).
+ */
+export type UpdateHoldScope = 'startup' | 'background'
+
 export class UpdateHoldBoard {
   private readonly holds = new Map<string, HeldState>()
 
@@ -149,6 +157,14 @@ export class UpdateHoldBoard {
 
   shown(): HeldState | null {
     return this.holds.get(PRIMARY_HOLD_OWNER) ?? this.holds.values().next().value ?? null
+  }
+
+  shownScope(): UpdateHoldScope | null {
+    if (this.holds.has(PRIMARY_HOLD_OWNER)) {
+      return 'startup'
+    }
+
+    return this.holds.size ? 'background' : null
   }
 }
 
