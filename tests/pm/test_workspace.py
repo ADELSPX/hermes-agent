@@ -60,6 +60,51 @@ def test_missing_explicit_seed_cannot_silently_resolve_new_versions(layout):
     assert not (tmp / "env").exists()
 
 
+def _plugin_pyproject(tmp: Path, name: str, body: str) -> Path:
+    directory = tmp / name
+    directory.mkdir()
+    (directory / "pyproject.toml").write_text(body, encoding="utf-8")
+    (directory / "plugin.yaml").write_text(f"name: {name}\n", encoding="utf-8")
+    return directory
+
+
+def test_plugin_extras_and_dev_groups_never_constrain_hermes(layout):
+    """Hermes installs neither a plugin's extras nor its dev group, so their pins (here an
+    unsatisfiable one against core's ``base-dep==1.0``) must not make the plugin uninstallable."""
+    import tomllib
+
+    tmp, core, _, _ = layout
+    plugin = _plugin_pyproject(tmp, "pinned-dev", (
+        '[project]\nname = "pinned-dev"\nversion = "1"\nrequires-python = ">=3.11"\n'
+        'dependencies = ["member-dep==1.0"]\n'
+        '[project.optional-dependencies]\ndev = ["base-dep==9.9"]\n'
+        '[dependency-groups]\ndev = ["other-dep==9.9"]\n[tool.uv]\npackage = false\n'))
+    root = tmp / "workspace"
+    ws.lock_and_sync([plugin], [], root=root, source=core, seed_lock=core / "uv.lock",
+                     environment=managed_environment(tmp / "env"))
+    locked = {p["name"]: p["version"] for p in tomllib.loads((root / "uv.lock").read_text())["package"]}
+    assert locked["base-dep"] == "1.0" and locked["member-dep"] == "1.0"
+
+
+def test_tool_config_pyproject_leaves_the_manifest_in_charge_of_dependencies(layout):
+    """A pyproject holding only tool settings (ruff, pytest) is not a package definition:
+    the plugin's manifest dependencies still install, instead of uv refusing a [project]
+    table PM had to invent."""
+    import tomllib
+
+    tmp, core, _, _ = layout
+    plugin = tmp / "lint-only"
+    plugin.mkdir()
+    (plugin / "pyproject.toml").write_text("[tool.ruff]\nline-length = 100\n", encoding="utf-8")
+    (plugin / "plugin.yaml").write_text("name: lint-only\npython_dependencies:\n  - member-dep==1.0\n",
+                                        encoding="utf-8")
+    root = tmp / "workspace"
+    ws.lock_and_sync([plugin], [], root=root, source=core, seed_lock=core / "uv.lock",
+                     environment=managed_environment(tmp / "env"))
+    locked = {p["name"] for p in tomllib.loads((root / "uv.lock").read_text())["package"]}
+    assert "member-dep" in locked
+
+
 class _TimedIndex:
     """A PEP 691 JSON index with per-file ``upload-time``.
 

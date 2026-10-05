@@ -248,6 +248,25 @@ def _member_key(identity: Path) -> str:
     return f"{name}-{digest}"
 
 
+def _installable_project(document: dict) -> bool:
+    """Drop what Hermes never installs from a plugin's pyproject; True when it changed.
+
+    Hermes never installs a plugin's extras, and uv syncs a member's default ``dev``
+    group into Hermes's own environment. Resolving them anyway made a plugin's
+    pytest/ruff pins conflict with core's.
+    """
+    project = document.get("project", {})
+    changed = False
+    if "optional-dependencies" in project and "optional-dependencies" not in project.get("dynamic", []):
+        del project["optional-dependencies"]
+        changed = True
+    for table, key in ((document, "dependency-groups"), (document.get("tool", {}).get("uv", {}), "dev-dependencies")):
+        if key in table:
+            del table[key]
+            changed = True
+    return changed
+
+
 def _workspace_member(plugin_dir: Path, root: Path, *, identity: Path) -> Path:
     """Keep workspace members with their generation, not a temporary install clone."""
     import json
@@ -272,6 +291,7 @@ def _workspace_member(plugin_dir: Path, root: Path, *, identity: Path) -> Path:
         changed = declaration.install_requirements != declaration.requirements
         if changed:
             document["project"]["dependencies"] = list(declaration.install_requirements)
+        changed = _installable_project(document) or changed
         for sources in document.get("tool", {}).get("uv", {}).get("sources", {}).values():
             for spec in sources if isinstance(sources, list) else [sources]:
                 if not isinstance(spec, dict) or "path" not in spec:
