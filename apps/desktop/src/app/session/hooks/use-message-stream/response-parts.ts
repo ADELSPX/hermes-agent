@@ -36,3 +36,33 @@ export function persistedFinalBubbleIndex(
     return (finalTextPart?.sourceRowId ?? message.rowId) === finalRowId
   })
 }
+
+/** The settle target for a terminal frame whose live stream bubble is gone
+ * from the screen: the persisted receipt's row identity, and only when no
+ * stream bubble survived to settle onto instead (stream matches win). */
+export function persistedFinalSettleIndex(
+  messages: readonly ChatMessage[],
+  lastUserIndex: number,
+  streamIndex: number,
+  finalRowId: number | null | undefined
+): number {
+  return streamIndex >= 0 ? -1 : persistedFinalBubbleIndex(messages, lastUserIndex, finalRowId)
+}
+
+/** The bubble a terminal frame settled its reply onto: the kept bubble when
+ * a duplicate was folded, else the live stream bubble or, for a reply whose
+ * streaming identity hydration replaced, the persisted receipt's own bubble. */
+export function completedTurnMessageId(
+  messages: readonly ChatMessage[],
+  streamIndex: number,
+  persistedIndex: number,
+  keptId: string | null
+): string | null {
+  if (keptId) {
+    return keptId
+  }
+
+  const index = streamIndex >= 0 ? streamIndex : persistedIndex
+
+  return index >= 0 ? messages[index].id : null
+}
