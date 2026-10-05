@@ -136,7 +136,11 @@ The stage-by-stage contract: `website/docs/developer-guide/cli-internals.md` § 
   `_ZIP_PRESERVED_NESTED` build outputs into the swap.
 - Restarts are fleet-wide and drain-first, bounded by the home each unit runs on
   (`update_fleet_scope.py`); another install's runtime is never restarted.
-- A provably-stale gateway fails the update (exit 1); every run writes a receipt under
+- After the commit point nothing fails `hermes update`: a stale gateway or failed post-commit
+  step is a receipt `followup` with its obligation kept armed, and a completion process that
+  could not start or died without a result is an owed `completion` follow-up (tail re-armed),
+  exit 0. One exception: the user's autostash left parked is `partial`, exit 1 (#122557);
+  Ctrl-C after the commit point is `interrupted`, exit 130. Receipts live under the ROOT home's
   `logs/update_receipts/`.
 - Nothing runs pulled code in the pre-pull interpreter. `update_handoff.py` and
   `update_serve_obligations.py` are a FROZEN compat surface (`tests/compat/old_updater_surface.json`):
@@ -184,7 +188,7 @@ target; table-driven `_PREFLIGHT_CHECKS`; manifest `<default>/gateway_migration.
 a re-run resumes from it; a named profile's `gateway install|start|run` refuse without `--force` via
 `gateway.py::_named_profile_refused_under_multiplexer`, dashboard twin
 `web_server_gateway.py::multiplexed_profile_refusal`);
-`update_cmd_fleet._verify_fleet_after_update` calls `maybe_auto_migrate_after_update` on the success
+`update_cmd_fleet_verify._verify_fleet_after_update` calls `maybe_auto_migrate_after_update` on the success
 path only; `gateway_migrate_guards.py` holds the auto-path-only refusals (table `_AUTO_MIGRATION_GUARDS`:
 other service domain / UNIX user / HERMES_HOME outside `profiles/` — notices for the explicit command,
 blockers for the hook) and the `gateway.auto_multiplex_migration` opt-out (#109954). Blockers reuse `GatewayRunner._adapter_credential_fingerprint` and `platform_binds_port`;
