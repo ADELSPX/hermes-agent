@@ -247,9 +247,8 @@ jobs:
   plugin-catalog-resolve:
     name: Plugin catalog resolve
     needs: detect
-    # Locks every catalog plugin together with core, comparing against the PR's
-    # base, so it is PR-only: a push has no base to compare, and would go red
-    # on every plugin that was already broken.
+    # Strict catalog-wide resolution: every broken entry blocks. Keep this
+    # admission check in the existing PR-only lane; releases do not rerun it.
     if: needs.detect.outputs.plugin_catalog == 'true' && needs.detect.outputs.event_name == 'pull_request'
     uses: ./.github/workflows/plugin-catalog-resolve.yml
 

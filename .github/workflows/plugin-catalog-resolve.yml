@@ -6,9 +6,8 @@ name: Plugin Catalog Resolve
 # listed plugin, fails here.
 #
 # Called from ci.yaml on pull requests whose diff touches catalog entries, core's
-# dependency manifests or the check itself (the `plugin_catalog` lane). It compares
-# against a run on the PR's base: only NEW failures block, plus any failure of an entry
-# the PR changes.
+# dependency manifests or the check itself (the `plugin_catalog` lane). Every failure
+# blocks, including already-broken entries. A resolving subset is not a passing catalog.
 #
 # This executes pinned third-party build backends (uv builds metadata for buildable
 # members): read-only token, no persisted credentials.
@@ -29,8 +28,6 @@ jobs:
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
         with:
-          fetch-depth: 0
-          filter: blob:none
           persist-credentials: false
 
       - name: Prepare Hermes from this checkout
@@ -39,36 +36,16 @@ jobs:
           toolchain: python
           extras: '[]'
 
-      - name: Resolve the base catalog (baseline)
-        if: github.event_name == 'pull_request'
-        run: |
-          set -euo pipefail
-          # HEAD is the PR merge commit; its first parent is what the PR lands on.
-          git worktree add --detach "$RUNNER_TEMP/base" 'HEAD^1'
-          # The base run never blocks; it only records what was already broken.
-          scripts/run-in-hermes-env python3 scripts/ci/catalog_resolve_all.py \
-            --source "$RUNNER_TEMP/base" --catalog "$RUNNER_TEMP/base/plugin-catalog" \
-            --cache "$RUNNER_TEMP/clones" --report "$RUNNER_TEMP/base.json" || true
-          test -f "$RUNNER_TEMP/base.json"
-
       - name: Resolve this catalog
         run: |
           set -euo pipefail
-          ARGS=(--cache "$RUNNER_TEMP/clones" --report "$RUNNER_TEMP/head.json")
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            ARGS+=(--baseline "$RUNNER_TEMP/base.json")
-            # NUL-delimited: entry filenames are PR-controlled.
-            while IFS= read -r -d '' file; do
-              ARGS+=(--require-file "$file")
-            done < <(git diff -z --name-only --diff-filter=AMRT 'HEAD^1' HEAD -- 'plugin-catalog/*.yaml' \
-                     | grep -zv '/removed\.yaml$' || true)
-          fi
-          scripts/run-in-hermes-env python3 scripts/ci/catalog_resolve_all.py "${ARGS[@]}"
+          scripts/run-in-hermes-env python3 scripts/ci/catalog_resolve_all.py \
+            --cache "$RUNNER_TEMP/clones" --report "$RUNNER_TEMP/head.json"
 
       - name: Upload reports
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: catalog-resolve-reports
-          path: ${{ runner.temp }}/*.json
+          path: ${{ runner.temp }}/head.json
           if-no-files-found: ignore

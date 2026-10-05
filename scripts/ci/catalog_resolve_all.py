@@ -11,13 +11,12 @@ Two passes:
   together  — plugins added one at a time onto the set that already locks; a plugin
               that breaks the set is bisected against it to name the first partner.
 
-Exit status: every failure blocks, unless ``--baseline`` names a report from the PR's base,
-in which case only new failures block, plus failures of ``--require NAME`` entries (the
-ones the PR changes). Required entries are added last, so a conflict between one and an
-already-listed plugin is blamed on the required entry.
+Exit status: every fetch, declaration, solo or combined resolution failure blocks.
+The accepted subset is diagnostic only; excluding a broken plugin cannot make the
+catalog pass.
 
-``--source`` is the Hermes checkout whose ``pm`` code and ``uv.lock`` are used, so a base
-run measures the base's resolver too. Run under the Hermes environment
+``--source`` is the Hermes checkout whose ``pm`` code and ``uv.lock`` are used.
+Run under the Hermes environment
 (``scripts/run-in-hermes-env python3 ...``).
 """
 
@@ -111,10 +110,6 @@ def main() -> int:
     parser.add_argument("--catalog", type=Path, default=Path("plugin-catalog"))
     parser.add_argument("--source", type=Path, default=Path("."), help="Hermes core checkout to lock against")
     parser.add_argument("--cache", type=Path, default=Path(tempfile.gettempdir()) / "catalog-clones")
-    parser.add_argument("--require", action="append", default=[], help="entries whose failure always blocks")
-    parser.add_argument("--require-file", action="append", type=Path, default=[],
-                        help="catalog entry file whose entry always blocks (the PR's changed entries)")
-    parser.add_argument("--baseline", type=Path, help="report from the base: failures already there do not block")
     parser.add_argument("--report", type=Path, help="write the JSON report here")
     parser.add_argument("--jobs", type=int, default=8)
     args = parser.parse_args()
@@ -123,15 +118,7 @@ def main() -> int:
     from hermes_cli.plugin_catalog import load_catalog
     from pm.plugin_declarations import read_python_declaration
 
-    import hermes_yaml
-
     entries = {entry.name: entry for entry in load_catalog(args.catalog)}
-    for path in args.require_file:
-        data = hermes_yaml.safe_load(path.read_text(encoding="utf-8-sig")) if path.is_file() else None
-        args.require.append(str(data.get("name")) if isinstance(data, dict) else f"<unreadable {path.name}>")
-    unknown = set(args.require) - set(entries)
-    if unknown:
-        parser.error(f"--require names not in the catalog: {', '.join(sorted(unknown))}")
     failures: dict[str, str] = {}
     dirs: dict[str, Path] = {}
     with concurrent.futures.ThreadPoolExecutor(args.jobs * 2) as pool:
@@ -153,9 +140,7 @@ def main() -> int:
         for name, (locked, reason) in solo.items():
             if locked is None:
                 failures[name] = f"solo: {reason[-1200:]}"
-        required = set(args.require)
-        order = sorted(n for n in dirs if n not in failures and n not in required) + \
-            sorted(n for n in dirs if n not in failures and n in required)
+        order = sorted(n for n in dirs if n not in failures)
         accepted: list[str] = []
         seed: Path | None = None
         for name in order:
@@ -169,16 +154,13 @@ def main() -> int:
             shutil.copyfile(locked, seed)
             print(f"  + {name} ({len(accepted)}/{len(order)})", flush=True)
 
-    known = set(json.loads(args.baseline.read_text(encoding="utf-8-sig"))["failures"]) if args.baseline else set()
-    blocking = {n: r for n, r in failures.items() if n in required or n not in known}
     for name, reason in sorted(failures.items()):
-        level = "error" if name in blocking else "warning"
         prefix = reason.split(":", 1)[0]
-        print(f"::{level} file={args.catalog / (name + '.yaml')}::{name}: {prefix}: {_headline(reason)}")
+        print(f"::error file={args.catalog / (name + '.yaml')}::{name}: {prefix}: {_headline(reason)}")
     if args.report:
         args.report.write_text(json.dumps({"locked_together": accepted, "failures": failures}, indent=2) + "\n", encoding="utf-8")
-    print(f"{len(accepted)} plugins lock together; {len(failures)} failing, {len(blocking)} blocking")
-    return 1 if blocking else 0
+    print(f"{len(accepted)} plugins lock together; {len(failures)} failing")
+    return 1 if failures else 0
 
 
 if __name__ == "__main__":
