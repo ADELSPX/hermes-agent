@@ -2642,7 +2642,9 @@ export const ja = defineLocale({
     },
     statusDivider: {
       working: '実行中',
-      done: '完了'
+      blocked: '応答待ち',
+      ready: '確認待ち',
+      inactive: '停止中'
     }
   },
 
