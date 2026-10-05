@@ -312,7 +312,8 @@ def mint_launcher(
 # an updater predating it) is rebuilt from git's objects at the marker's ``pre`` with the recorded
 # git or an absolute PATH entry (never one from the current directory) and verified the same way.
 # Stdlib plus that copy only, under the same claim and checkout lock (a live writer still refuses,
-# which exits 1 with the repair's own reason), then a relaunch from the restored tree.
+# which exits 1 with the repair's own reason), then a relaunch from the restored tree. A repair that
+# neither restored nor said anything (a stale marker) returns True: the caller re-raises the real error.
 _CLOSURE_REPAIR = """\
 def _hermes_closure_repair():
     import contextlib, hashlib, io, shutil, subprocess
@@ -400,8 +401,9 @@ def _hermes_closure_repair():
         sys.stderr.write('hermes: the checkout could not start after an interrupted `hermes update`; '
                          'repaired it with the recovery code saved before the update.\\n' + said.getvalue())
         _early_recovery.relaunch_after_restore()
-    sys.stderr.write(said.getvalue() or 'hermes: the checkout cannot start after an interrupted `hermes update`; '
-                     'launch again once the update that owns it finishes.\\n')
+    if not said.getvalue():
+        return True
+    sys.stderr.write(said.getvalue())
     raise SystemExit(1)
 """
 

@@ -159,6 +159,25 @@ def test_the_published_repair_leaves_the_tree_to_a_live_writer_holding_the_check
     assert (root / "hermes_bootstrap.py").read_bytes() == original
 
 
+@pytest.mark.platforms("posix")
+@pytest.mark.parametrize(("rel", "args"), [("hermes_bootstrap.py", []),
+                                           ("hermes_cli/_early_recovery.py", ["--print-runtime-command"])])
+def test_a_stale_marker_does_not_hide_an_unrelated_startup_error(tmp_path, rel, args):
+    """Git finished (HEAD is the target) but the marker stayed, and the checkout fails for another
+    reason: the repair has nothing to do and says nothing, so the launch shows the real error (R9-1)."""
+    root, env, _original, launcher = _killed_mid_write(tmp_path, rel)
+    marker = root / ".git/hermes-update-pull"
+    target = dict(line.partition("=")[::2] for line in marker.read_text(encoding="utf-8-sig").splitlines())["target"]
+    (root / ".git/index.lock").unlink(missing_ok=True)  # the killed git's; a later git finishes the move
+    subprocess.run([shutil.which("git") or "git", "-C", str(root), "reset", "-q", "--hard", target], env=env, check=True)
+    with open(root / rel, "a", encoding="utf-8") as fh:
+        fh.write("\ndef broken(:\n")
+    launch = subprocess.run([str(launcher), *args], cwd=tmp_path, env=env, capture_output=True,
+                            text=True, encoding="utf-8", errors="replace", timeout=60)
+    assert launch.returncode != 0 and "SyntaxError" in launch.stderr, launch.stderr
+    assert "the update that owns it" not in launch.stderr, launch.stderr
+    assert not marker.exists()  # nothing was owed: the stale marker is consumed
+
 
 @pytest.mark.platforms("posix")
 @pytest.mark.parametrize("damage", ["truncated", "foreign"])
