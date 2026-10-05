@@ -75,8 +75,25 @@ def test_failed_update_reports_the_stage_it_never_reached(marks, monkeypatch):
         "apply_mode": "git", "duration_bucket": "lt_30s", "failed_stage": "deps",
         "from_version_age_bucket": "7d_to_30d", "kind": "cli", "outcome": "failed",
     }]
+    # The stage the run died in carries a failed row, so run and stage counts agree.
     assert [(s["stage"], s["outcome"]) for s in stages] == [
-        ("plan", "success"), ("snapshot", "skipped"), ("apply", "success")]
+        ("plan", "success"), ("snapshot", "skipped"), ("apply", "success"), ("deps", "failed")]
+    _assert_valid(marks.rows)
+
+
+def test_failed_build_is_blamed_on_build_not_the_verify_it_never_reached(marks, monkeypatch):
+    _identity(monkeypatch, "a" * 40)
+    update_receipt.begin_update_receipt()
+    for name, outcome in (("plan", "success"), ("snapshot", "skipped"), ("apply", "success"),
+                          ("deps", "success"), ("build", "failed"), ("restart", "success")):
+        update_receipt.record_stage(name, outcome)
+    # The update still restarts gateways after a failed build, then exits 1 with no fleet rows.
+    update_receipt.finalize_pending_update_receipt(1, "completion exited 1")
+
+    runs = [data for mark, data in marks.rows if mark == contract.UPDATE_RUN_MARK]
+    stages = [(d["stage"], d["outcome"]) for mark, d in marks.rows if mark == contract.UPDATE_STAGE_MARK]
+    assert [run["failed_stage"] for run in runs] == ["build"]
+    assert ("verify", "failed") not in stages and stages.count(("build", "failed")) == 1
     _assert_valid(marks.rows)
 
 

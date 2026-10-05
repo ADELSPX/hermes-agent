@@ -86,10 +86,14 @@ def _failed_stage(stages: list[dict[str, Any]]) -> str:
     if not stages:
         return "other"
     last = stages[-1]
+    failed = [s["name"] for s in stages if s.get("outcome") == "failed"]
     terminal = last["name"] == "verify" or (last["name"] == "restart" and last.get("outcome") == "skipped")
     if last.get("outcome") == "failed" or terminal:
-        failed = [s["name"] for s in stages if s.get("outcome") == "failed"]
         return failed[-1] if failed else "other"
+    # A failed build fails the run, yet the restart still runs after it and verify leaves no mark
+    # when no gateway answers: without this the run is blamed on the "verify" it never reached.
+    if "build" in failed:
+        return "build"
     index = UPDATE_STAGE_ORDER.index(last["name"])
     return UPDATE_STAGE_ORDER[index + 1] if index + 1 < len(UPDATE_STAGE_ORDER) else "other"
 
@@ -106,7 +110,7 @@ def _apply_mode(receipt: dict[str, Any], stages: list[dict[str, Any]]) -> str:
 
 def update_receipt_fields(receipt: dict[str, Any]) -> tuple[dict[str, str], list[dict[str, str]]] | None:
     """Bounded hermes.update.run + hermes.update.stage dimensions for one FINAL receipt."""
-    from .shared_metrics_contract import update_duration_bucket, version_age_bucket
+    from .shared_metrics_contract import UPDATE_STAGES, update_duration_bucket, version_age_bucket
 
     if not isinstance(receipt, dict) or not receipt.get("finished_at"):
         return None
@@ -135,6 +139,16 @@ def update_receipt_fields(receipt: dict[str, Any]) -> tuple[dict[str, str], list
         }
         for stage in stages
     ]
+    # A stage that dies by exception (PM preparation, a product build) never writes its own mark;
+    # without this row hermes.update.stage reports 0 failures for the stage the runs died in.
+    died_in = run["failed_stage"]
+    if outcome == "failed" and died_in in UPDATE_STAGES and not any(
+            row["stage"] == died_in and row["outcome"] == "failed" for row in stage_rows):
+        previous = stages[-1].get("at") if stages else receipt.get("started_at")
+        stage_rows.append({
+            "duration_bucket": update_duration_bucket(_elapsed_ms(previous, receipt.get("finished_at"))),
+            "outcome": "failed", "stage": died_in,
+        })
     return run, stage_rows
 
 
