@@ -1610,6 +1610,14 @@ try {
         }
     }
 
+    # Contract C3: a Desktop build that failed after the code committed is an owed follow-up
+    # (exit 0); the CLI prints one whole "Desktop app build owed:" line for it (the follow-up
+    # text itself is truncated). The user is on the new Hermes but this app was not rebuilt.
+    if ($res.Code -eq 0 -and -not $desktopBuildFailed -and $res.Output -match '(?m)^\s*Desktop app build owed: ') {
+        $desktopBuildFailed = $true
+        Add-Followup "desktop build owed" "the Desktop app could not be rebuilt, so it still runs its old build. Run 'hermes desktop --force-build' in a terminal to rebuild it; the update log has the build error." -Manual
+    }
+
     # A zero-exit update is not proof that the runtime survived the update.
     if (-not $desktopBuildFailed) {
         $verifyFailure = $null
