@@ -3011,7 +3011,7 @@ const UPDATE_HANDOFF_DWELL_MS = 2500
 // wrapper exits 0 before the real PowerShell script claims the marker, and
 // `finally` clears updateInFlight immediately after the hand-off is accepted.
 function updateGateDeps(
-  onLiveMarker?: (marker: { startedAt: number | null }) => void,
+  onLiveMarker?: (marker: { startedAt: number | null; runId: string | null }) => void,
   onHeld?: (state: HeldState) => void,
   onOverride?: (holdId: string) => void
 ) {
@@ -3191,9 +3191,9 @@ function renderUpdateHold(state: HeldState, bootPhase: boolean) {
 async function waitForUpdateToFinish() {
   let announced = false
   let longWaitAnnounced = false
-  // Marker line 2 of the run this boot parked on: the result we report is that
-  // run's, never an older one (C2 started_at match).
-  let parkedRunStartedAt: number | null = null
+  // Stable across heartbeat refreshes, including when first opened mid-update.
+  // Keep line 2 only for compatibility with older result producers.
+  let parkedRun: { startedAt: number | null; runId: string | null } = { startedAt: null, runId: null }
   // A dead marker whose checkout a leftover process still holds (R6), or whose
   // ownership the helper could not establish: its state this poll, and since
   // when it has blocked this wait (the blocked screen's grace, R8 D3).
@@ -3205,7 +3205,7 @@ async function waitForUpdateToFinish() {
 
   const gateDeps = updateGateDeps(
     marker => {
-      parkedRunStartedAt = marker.startedAt
+      parkedRun = marker
       overridden = false
     },
     state => {
@@ -3286,7 +3286,8 @@ async function waitForUpdateToFinish() {
   // "nothing happened").
   try {
     const result = readAndConsumeHandoffResult(HERMES_HOME, {
-      expectedStartedAt: parkedRunStartedAt,
+      expectedStartedAt: parkedRun.startedAt,
+      expectedRunId: parkedRun.runId,
       log: rememberLog
     })
 
