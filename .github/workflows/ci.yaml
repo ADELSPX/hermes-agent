@@ -72,6 +72,7 @@ jobs:
       deps: ${{ steps.gate-lanes.outputs.deps }}
       uv_lock: ${{ steps.gate-lanes.outputs.uv_lock }}
       npm_lock: ${{ steps.gate-lanes.outputs.npm_lock }}
+      plugin_catalog: ${{ steps.gate-lanes.outputs.plugin_catalog }}
       bootstrap: ${{ steps.gate-lanes.outputs.bootstrap }}
       desktop_updater: ${{ steps.gate-lanes.outputs.desktop_updater }}
       rust: ${{ steps.gate-lanes.outputs.rust }}
@@ -243,6 +244,15 @@ jobs:
     if: needs.detect.outputs.uv_lock == 'true'
     uses: ./.github/workflows/uv-lockfile-check.yml
 
+  plugin-catalog-resolve:
+    name: Plugin catalog resolve
+    needs: detect
+    # Locks every catalog plugin together with core, comparing against the PR's
+    # base, so it is PR-only: a push has no base to compare, and would go red
+    # on every plugin that was already broken.
+    if: needs.detect.outputs.plugin_catalog == 'true' && needs.detect.outputs.event_name == 'pull_request'
+    uses: ./.github/workflows/plugin-catalog-resolve.yml
+
   infographic-check:
     name: Check no committed infographics
     needs: detect
@@ -323,6 +333,7 @@ jobs:
       - history-check
       - contributor-check
       - uv-lockfile
+      - plugin-catalog-resolve
       - infographic-check
       - case-collision-check
       - lazy-deps-guard

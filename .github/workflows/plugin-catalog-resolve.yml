@@ -5,33 +5,20 @@ name: Plugin Catalog Resolve
 # core's lock as the seed. A plugin that cannot install, or that conflicts with another
 # listed plugin, fails here.
 #
-# PRs compare against their base: only NEW failures block, plus any failure of an entry
-# the PR changes. Core dependency bumps and resolver changes run too, since they can
-# break listed plugins. The weekly run has no baseline, so anything broken is red.
+# Called from ci.yaml on pull requests whose diff touches catalog entries, core's
+# dependency manifests or the check itself (the `plugin_catalog` lane). It compares
+# against a run on the PR's base: only NEW failures block, plus any failure of an entry
+# the PR changes.
 #
 # This executes pinned third-party build backends (uv builds metadata for buildable
 # members): read-only token, no persisted credentials.
 
 on:
-  pull_request:
-    paths:
-      - "plugin-catalog/**"
-      - "pm/workspace.py"
-      - "pm/plugin_declarations.py"
-      - "pyproject.toml"
-      - "uv.lock"
-      - "scripts/ci/catalog_resolve_all.py"
-      - ".github/workflows/plugin-catalog-resolve.yml"
-  schedule:
-    - cron: "17 6 * * 1"
+  workflow_call:
   workflow_dispatch:
 
 permissions:
   contents: read
-
-concurrency:
-  group: plugin-catalog-resolve-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
 
 jobs:
   resolve:
