@@ -190,11 +190,75 @@ def _project(tmp_path: Path, *, pyproject: bool = True) -> Path:
     return root
 
 
+@pytest.mark.parametrize("link", ["hardlink", "symlink"])
+def test_zip_journal_writer_never_writes_through_a_preexisting_temp(tmp_path, link):
+    """A temp left at the journal's fixed temp name as a link must not carry the journal into its target."""
+    root = tmp_path / "install"
+    root.mkdir()
+    secret = root / ".env"
+    secret.write_text("API_KEY=keep\n", encoding="utf-8")
+    tmp = root / (er.ZIP_SWAP_JOURNAL + ".tmp")
+    if link == "hardlink":
+        os.link(secret, tmp)
+    else:
+        try:
+            tmp.symlink_to(secret)
+        except OSError:
+            pytest.skip("symlinks need privileges here")
+    er.write_zip_swap_journal(root, "staging", [["a.py", True]])
+    assert secret.read_text(encoding="utf-8-sig") == "API_KEY=keep\n"
+    journal = root / er.ZIP_SWAP_JOURNAL
+    assert not journal.is_symlink() and '"phase": "staging"' in journal.read_text(encoding="utf-8-sig")
 
 
+@pytest.mark.parametrize("body", ["", "{not json", '{"phase": "swap", "entries": [["a.py", true]]}',
+                                  '{"phase": "swapping", "entries": [["../a.py", true]]}', "read-error"])
+def test_an_unparsed_zip_journal_keeps_itself_and_every_backup(tmp_path, monkeypatch, body):
+    """A mid-swap tree (a.py new with its backup, b.py old with its staging copy) whose journal cannot
+    be read or understood is never settled by guesswork: the journal and every sibling stay."""
+    root = tmp_path / "install"
+    root.mkdir()
+    for name, text in {"a.py": "NEW_A", "a.py.hermes-update-old": "OLD_A", "b.py": "OLD_B",
+                       "b.py.hermes-update-staging": "NEW_B"}.items():
+        (root / name).write_text(text, encoding="utf-8")
+    journal = root / er.ZIP_SWAP_JOURNAL
+    journal.write_text('{"phase": "swapping", "entries": [["a.py", true], ["b.py", true]]}'
+                       if body == "read-error" else body, encoding="utf-8")
+    if body == "read-error":  # one transient read failure (AV scan, sharing violation)
+        real = Path.read_text
+
+        def flaky(self, *args, **kwargs):
+            if self == journal:
+                raise PermissionError(13, "in use")
+            return real(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "read_text", flaky)
+    assert er.restore_interrupted_zip_swap(root) is False
+    assert journal.is_file()
+    assert {p.name: p.read_text(encoding="utf-8-sig") for p in root.iterdir() if p != journal and p.suffix != ".lock"} == {
+        "a.py": "NEW_A", "a.py.hermes-update-old": "OLD_A", "b.py": "OLD_B", "b.py.hermes-update-staging": "NEW_B"}
 
 
+@pytest.mark.skipif(sys.platform == "win32" or getattr(os, "geteuid", lambda: 0)() == 0,
+                    reason="POSIX modes; root ignores them")
+def test_dropping_a_staged_tree_never_changes_a_hardlinked_live_files_mode(tmp_path):
+    live = tmp_path / "release"
+    live.mkdir()
+    (live / "Hermes.exe").write_bytes(b"app")
+    staging = tmp_path / "apps.hermes-update-staging" / "release"
+    staging.mkdir(parents=True)
+    os.link(live / "Hermes.exe", staging / "Hermes.exe")
+    (live / "Hermes.exe").chmod(0o555)
+    staging.chmod(0o555)  # a read-only dir refuses rmtree: the retry path runs
+    er._drop_path(staging.parent)
+    assert not staging.parent.exists()
+    assert (live / "Hermes.exe").stat().st_mode & 0o777 == 0o555
 
 
-
-
+@pytest.mark.parametrize("body", ['{"attempts": Infinity}', '{"attempts": -Infinity}', '{"attempts": NaN}',
+                                  '{"attempts": true}', '{"attempts": -4}'])
+def test_marker_attempts_from_a_hand_edited_body_are_a_nonnegative_int(tmp_path, body):
+    marker = tmp_path / ".update-incomplete"
+    marker.write_text(body, encoding="utf-8")
+    attempts = er._read_marker_attempts(marker)
+    assert type(attempts) is int and attempts >= 0

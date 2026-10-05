@@ -777,9 +777,11 @@ def _legacy_kill_process_tree(proc: "subprocess.Popen") -> None:
 def bounded_probe_run(
     argv: Sequence[str], *, timeout: float, errors: str = "replace",
     env: "Mapping[str, str] | None" = None, cwd: "str | os.PathLike[str] | None" = None,
-    raise_on_spawn_failure: bool = False,
+    raise_on_spawn_failure: bool = False, popen_kwargs: "Mapping[str, object] | None" = None,
 ) -> "subprocess.CompletedProcess[str] | None":
     """Deadlock-safe ``subprocess.run(argv, capture_output=True, timeout=…)`` for fail-open probes.
+
+    ``popen_kwargs`` adds Popen arguments (the update's custody: ``pass_fds``/``preexec_fn``).
 
     Returns a ``CompletedProcess`` when the child finished within *timeout* (any exit code), or
     ``None`` on spawn failure or timeout. With ``raise_on_spawn_failure=True`` the ``Popen``
@@ -794,6 +796,7 @@ def bounded_probe_run(
     machines (#87134); the git probes hit it first (#68609 / #66037).
     """
     _popen_kwargs: dict = {"creationflags": windows_hide_flags()} if IS_WINDOWS else {"process_group": 0}
+    _popen_kwargs.update(popen_kwargs or {})
     job = None
     try:
         # Windows: contain the probe in a Job Object. `taskkill /T` walks LIVE parent pids, and a
