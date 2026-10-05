@@ -245,9 +245,10 @@ export async function fetchPrimaryProfileSessions(
  *  window means every profile in it may have more rows on disk (#72492). */
 export function profilesTruncatedFrom(
   sessions: ReadonlyArray<{ profile?: string }>,
-  cap: number,
+  recentsLimit: string | null,
   profileTotals?: Record<string, number>
 ): Record<string, boolean> {
+  const cap = Math.max(1, Number(recentsLimit) || 20)
   const globalTruncated = sessions.length >= cap
   const counts = new Map<string, number>()
 
@@ -275,14 +276,15 @@ export function profilesTruncatedFrom(
 
 /** Reassemble the batched sidebar response from its three per-slice reads,
  *  keeping each slice's `errors` so a failed scan is never read as an
- *  authoritative empty slice. `recentsCap` is the sidebar's recents window —
- *  the fallback truncation heuristic needs it to tell a full page from a
- *  short one. */
+ *  authoritative empty slice. `recentsParams` is the recents slice request
+ *  (from `buildSidebarSessionSliceParams`); its `limit` is the recents
+ *  window the fallback truncation heuristic needs to tell a full page from
+ *  a short one. */
 export function assembleSidebarSessionSlices(
   recents: unknown,
   cron: unknown,
   messaging: unknown,
-  recentsCap = 20
+  recentsParams?: URLSearchParams
 ) {
   const slice = (data: unknown) => {
     const errors = errorsOf(data)
@@ -303,7 +305,7 @@ export function assembleSidebarSessionSlices(
       // "Load more" affordance the local fast path gets for free.
       profiles_truncated: profilesTruncatedFrom(
         rowsOf(recents) as Array<{ profile?: string }>,
-        recentsCap,
+        recentsParams?.get('limit'),
         (recentsSlice?.profile_totals || {}) as Record<string, number>
       )
     },
