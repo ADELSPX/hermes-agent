@@ -107,6 +107,40 @@ def unsupported_requirements(specs: tuple[str, ...] | list[str]) -> tuple[str, .
     return tuple(spec for spec in specs if Requirement(spec).url)
 
 
+def locked_versions(lock: Path) -> dict[str, str]:
+    """``{canonical name: version}`` for every package a ``uv.lock`` pins."""
+    from packaging.utils import canonicalize_name
+
+    return {canonicalize_name(package["name"]): package.get("version", "")
+            for package in tomllib.loads(lock.read_text(encoding="utf-8-sig")).get("package", [])}
+
+
+def quarantine_exemptions(pyproject: Path, core_locked: set[str]) -> tuple[list[str], list[str]]:
+    """``(honoured, refused)`` names from a plugin's ``[tool.uv] exclude-newer-package``.
+
+    Same rule core follows for itself: an exemption is honoured only as ``false`` on a
+    direct dependency the plugin exact-pins and Hermes core's lock does not hold, so a
+    plugin can let its own fresh release through without loosening anything else.
+    """
+    from packaging.requirements import Requirement
+    from packaging.utils import canonicalize_name
+
+    document = tomllib.loads(pyproject.read_text(encoding="utf-8-sig"))
+    table = document.get("tool", {}).get("uv", {}).get("exclude-newer-package", {})
+    exact = set()
+    for spec in document.get("project", {}).get("dependencies", []):
+        requirement = Requirement(spec)
+        operators = [clause.operator for clause in requirement.specifier]
+        if operators in (["=="], ["==="]) and "*" not in str(requirement.specifier):
+            exact.add(canonicalize_name(requirement.name))
+    honoured, refused = [], []
+    for name, value in table.items() if isinstance(table, dict) else ():
+        key = canonicalize_name(name)
+        ok = value is False and key in exact and key not in core_locked
+        (honoured if ok else refused).append(key)
+    return honoured, refused
+
+
 def read_python_declaration(plugin_dir: Path) -> PythonDeclaration:
     """One effective surface for consent, membership, builds and currency.
 
