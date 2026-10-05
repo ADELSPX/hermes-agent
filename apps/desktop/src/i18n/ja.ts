@@ -953,7 +953,8 @@ export const ja = defineLocale({
         maxIterations: 'サブエージェントターン上限',
         maxConcurrentChildren: '並列サブエージェント',
         childTimeoutSeconds: 'サブエージェントタイムアウト',
-        reasoningEffort: 'サブエージェント推論強度'
+        reasoningEffort: 'サブエージェント推論強度',
+        serviceTier: 'サブエージェント速度'
       },
       updates: {
         nonInteractiveLocalChanges: 'アプリ内更新時のローカル変更'
