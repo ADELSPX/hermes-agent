@@ -1,0 +1,87 @@
+name: Plugin Catalog Resolve
+
+# Locks every catalog plugin together with Hermes core (scripts/ci/catalog_resolve_all.py),
+# exactly as an install resolves them: the 14-day release quarantine, plugin exemptions,
+# core's lock as the seed. A plugin that cannot install, or that conflicts with another
+# listed plugin, fails here.
+#
+# PRs compare against their base: only NEW failures block, plus any failure of an entry
+# the PR changes. Core dependency bumps and resolver changes run too, since they can
+# break listed plugins. The weekly run has no baseline, so anything broken is red.
+#
+# This executes pinned third-party build backends (uv builds metadata for buildable
+# members): read-only token, no persisted credentials.
+
+on:
+  pull_request:
+    paths:
+      - "plugin-catalog/**"
+      - "pm/workspace.py"
+      - "pm/plugin_declarations.py"
+      - "pyproject.toml"
+      - "uv.lock"
+      - "scripts/ci/catalog_resolve_all.py"
+      - ".github/workflows/plugin-catalog-resolve.yml"
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: plugin-catalog-resolve-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      GIT_TERMINAL_PROMPT: "0"
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
+        with:
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Prepare Hermes from this checkout
+        uses: ./.github/actions/setup-pm
+        with:
+          toolchain: python
+          extras: '[]'
+
+      - name: Resolve the base catalog (baseline)
+        if: github.event_name == 'pull_request'
+        run: |
+          set -euo pipefail
+          # HEAD is the PR merge commit; its first parent is what the PR lands on.
+          git worktree add --detach "$RUNNER_TEMP/base" 'HEAD^1'
+          # The base run never blocks; it only records what was already broken.
+          scripts/run-in-hermes-env python3 scripts/ci/catalog_resolve_all.py \
+            --source "$RUNNER_TEMP/base" --catalog "$RUNNER_TEMP/base/plugin-catalog" \
+            --cache "$RUNNER_TEMP/clones" --report "$RUNNER_TEMP/base.json" || true
+          test -f "$RUNNER_TEMP/base.json"
+
+      - name: Resolve this catalog
+        run: |
+          set -euo pipefail
+          ARGS=(--cache "$RUNNER_TEMP/clones" --report "$RUNNER_TEMP/head.json")
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            ARGS+=(--baseline "$RUNNER_TEMP/base.json")
+            # NUL-delimited: entry filenames are PR-controlled.
+            while IFS= read -r -d '' file; do
+              ARGS+=(--require-file "$file")
+            done < <(git diff -z --name-only --diff-filter=AMRT 'HEAD^1' HEAD -- 'plugin-catalog/*.yaml' \
+                     | grep -zv '/removed\.yaml$' || true)
+          fi
+          scripts/run-in-hermes-env python3 scripts/ci/catalog_resolve_all.py "${ARGS[@]}"
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: catalog-resolve-reports
+          path: ${{ runner.temp }}/*.json
+          if-no-files-found: ignore
