@@ -828,6 +828,57 @@ function durableFoldCoversLiveResponse(folds: ChatMessage[], live: ChatMessage):
   )
 }
 
+/** Answer text of a row under the fold compare: the text after the last tool
+ *  call for a tool turn, the whole text otherwise — reference lines stripped,
+ *  separators folded, so a store-side join difference is not a mismatch. */
+const foldedAnswerForCompare = (message: ChatMessage): string => {
+  const raw = toolCallIdsOf(message).length
+    ? lastFoldedResponseText(message)
+    : textWithoutReferenceLines(chatMessageText(message))
+
+  return raw.replace(/\s+/g, ' ').trim()
+}
+
+/**
+ * #131500: is a committed fold the durable twin of the still-live local row?
+ *
+ * A reconnect can leave a stale live copy in the renderer's in-memory list
+ * while the durable refresh delivers the same reply folded under a
+ * different (positionally synthesized) id. Ordinal pairing misses it — a
+ * hidden directive in the turn shifts the ordinals — and full-text compare
+ * misses it too: history folds narration, tools and answer into one bubble,
+ * and the two sides join segments with different separators. Both copies
+ * then render until a process restart rebuilds state.
+ *
+ * Matching mirrors assistantTimelineMatch's arms (chat-messages/
+ * reconciliation.ts), anchored to the live row's own user turn by
+ * committedFoldsOfLocalTurn so a repeated answer in an older turn cannot
+ * pass: row id, tool-call id overlap, or normalized final-text equality.
+ * The fold must also HOLD the live row's answer — equal (the stale copy's
+ * exact content) or further along (the settled final, mirroring the
+ * committedMatch drop). A lagging partial never retires the stream: that
+ * mid-turn flush is the committedPrefix replacement / fold-carry path.
+ */
+function committedTwinCoversLiveResponse(folds: ChatMessage[], live: ChatMessage): boolean {
+  const liveRowIds = transcriptRowIds(live)
+  const liveToolIds = toolCallIdsOf(live)
+  const liveAnswer = foldedAnswerForCompare(live)
+
+  return folds.some(fold => {
+    if (liveRowIds.length && transcriptRowIds(fold).some(id => liveRowIds.includes(id))) {
+      return true
+    }
+
+    if (liveToolIds.length && toolCallIdsOf(fold).some(id => liveToolIds.includes(id))) {
+      const foldAnswer = foldedAnswerForCompare(fold)
+
+      return Boolean(foldAnswer) && (foldAnswer === liveAnswer || isStrictAnswerTextExtension(foldAnswer, liveAnswer))
+    }
+
+    return Boolean(liveAnswer) && liveAnswer === foldedAnswerForCompare(fold)
+  })
+}
+
 export function preserveLocalPendingTurnMessages(
   nextMessages: ChatMessage[],
   previousMessages: ChatMessage[]
@@ -1138,6 +1189,16 @@ export function preserveLocalPendingTurnMessages(
     if (
       isPendingAssistant &&
       durableFoldCoversLiveResponse(committedFoldsOfLocalTurn(candidates, previousMessages, index), message)
+    ) {
+      continue
+    }
+
+    // #131500: the durable refresh already carries this reply's committed twin
+    // under a different id — retire the stale live copy instead of rendering it
+    // beside the committed bubble.
+    if (
+      isPendingAssistant &&
+      committedTwinCoversLiveResponse(committedFoldsOfLocalTurn(candidates, previousMessages, index), message)
     ) {
       continue
     }
