@@ -3229,6 +3229,7 @@ export interface SessionArchiveParams {
   session_id?: string | null
   session_key?: string | null
   archived?: boolean
+  confirm_cascade?: boolean | null
   profile?: string | null
 }
 export interface SessionArchiveResult {

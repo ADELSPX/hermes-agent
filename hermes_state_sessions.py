@@ -29,6 +29,30 @@ from hermes_state_compression import _CHAIN_CAP
 logger = logging.getLogger("hermes_state")
 
 
+def _log_session_archive(db_path: Optional[Path], target_session_id: str, archived: bool,
+                         preview: Dict[str, Any], trigger: str) -> None:
+    """Append one JSON line per successful archive/unarchive to ``<db dir>/logs/archives.jsonl``.
+
+    The state.db row is the only record of what a cascade hid, so an unexpected archive
+    leaves no recoverable trail; the JSONL file sits next to state.db (the profile's own home,
+    so two profiles don't share one log) and survives it. Best-effort by design — a filesystem
+    hiccup must never fail the user's archive call (#70185)."""
+    try:
+        from hermes_constants import get_hermes_home
+        log_dir = (Path(db_path).resolve().parent if db_path else get_hermes_home()) / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "ts": time.time(), "trigger": trigger, "target": target_session_id,
+            "archived": bool(archived),
+            "cascade_count": int(preview.get("cascade_count", 0)),
+            "affected_ids": list(preview.get("affected_ids", ())),
+        }
+        with (log_dir / "archives.jsonl").open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    except Exception:
+        logger.debug("archive audit log append failed", exc_info=True)
+
+
 def workspace_key(row: Dict[str, Any]) -> Optional[str]:
     """Workspace grouping key: git repo root, else cwd, else None (branch excluded: a checkout must not
     fragment history)."""
@@ -960,12 +984,49 @@ class SessionSessionsMixin:
             (session_id, session_id, value),
         ) > 0
 
-    def set_session_archived(self, session_id: str, archived: bool) -> bool:
+    def preview_session_archive_lineage(self, session_id: str, archived: bool = True) -> Dict[str, Any]:
+        """Rows :meth:`set_session_archived` would flip, read-only (the confirmation gate's data).
+
+        Runs the same lineage CTE as the archive UPDATE, filtered to rows whose ``archived``
+        flag would actually change, so an idempotent re-archive previews an empty cascade.
+        Returns ``cascade_count`` (rows that would flip), ``cascade_extra`` (rows beyond the
+        targeted one), ``affected_ids``, and the oldest/newest ``started_at`` in the set
+        (#70185)."""
+        rows = self._read_all(
+            _LINEAGE_CTE_SQL + """
+            SELECT id, started_at FROM sessions
+            WHERE id IN (SELECT id FROM lineage) AND archived IS NOT ?
+            ORDER BY started_at
+            """,
+            (session_id, session_id, 1 if archived else 0),
+        )
+        affected_ids = [row["id"] for row in rows]
+        started = [row["started_at"] for row in rows if row["started_at"] is not None]
+        return {
+            "cascade_count": len(affected_ids),
+            "cascade_extra": max(0, len(affected_ids) - 1),
+            "affected_ids": affected_ids,
+            "oldest_started_at": min(started) if started else None,
+            "newest_started_at": max(started) if started else None,
+        }
+
+    def set_session_archived(
+        self, session_id: str, archived: bool, *, trigger: str = "api",
+    ) -> bool:
         """Soft-hide (or unhide) a session and its compression lineage; messages are kept.
         This is the DELIBERATE archive (user, CLI, API): it clears the ``auto_archived``
-        provenance, so re-activation never un-hides it on the user's behalf."""
-        return self._set_lineage_column(
+        provenance, so re-activation never un-hides it on the user's behalf.
+
+        One call can flip a whole compression lineage (the user's one click hides N rows,
+        #70185): callers that need the blast radius first run
+        :meth:`preview_session_archive_lineage`, and every successful call appends an audit
+        record (trigger, timestamp, ids) to ``<db dir>/logs/archives.jsonl``."""
+        preview = self.preview_session_archive_lineage(session_id, archived)
+        result = self._set_lineage_column(
             "archived", session_id, int(archived), extra_set_sql=", auto_archived = 0")
+        if result:
+            _log_session_archive(self.db_path, session_id, archived, preview, trigger)
+        return result
 
     def _auto_archive_lineage(self, session_id: str) -> bool:
         """The idle sweep's archive: like :meth:`set_session_archived` but stamps

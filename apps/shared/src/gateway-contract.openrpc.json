@@ -28812,6 +28812,18 @@
             "title": "Archived",
             "type": "boolean"
           },
+          "confirm_cascade": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Confirm Cascade"
+          },
           "profile": {
             "anyOf": [
               {
