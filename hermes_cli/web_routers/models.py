@@ -106,23 +106,18 @@ def get_model_info(profile: Optional[str] = None):
         # after pinning it as the global default, surface the first valid
         # existing preset — the same fallback ``normalize_moa_config`` already
         # applies to ``moa.default_preset`` — instead of handing new desktop
-        # sessions a dead model name. ``stale_default`` lets the frontend warn.
+        # sessions a dead model name (#82613). ``stale_default`` lets the
+        # frontend warn. ``normalize_moa_config`` is deliberately tolerant (a
+        # broken MoA section degrades to the built-in preset), so this check
+        # cannot raise and never fails the endpoint.
         stale_default = False
-        if provider == "moa" and model_name:
-            try:
-                from agent.errors import MoAPresetNotFoundError
-                from hermes_cli.moa_config import normalize_moa_config, resolve_moa_preset
+        if provider == "moa":
+            from hermes_cli.moa_config import normalize_moa_config
 
-                moa_cfg = cfg.get("moa") or {}
-                try:
-                    resolve_moa_preset(moa_cfg, model_name)
-                except MoAPresetNotFoundError:
-                    stale_default = True
-                    model_name = normalize_moa_config(moa_cfg)["default_preset"]
-            except Exception:
-                # Never fail the endpoint for a validation nicety; if MoA
-                # config itself is broken, keep reporting model.default as-is.
-                stale_default = False
+            moa = normalize_moa_config(cfg.get("moa"))
+            if model_name not in moa["presets"]:
+                stale_default = True
+                model_name = moa["default_preset"]
 
         try:
             # config_context_length=None: ignore the override — we want the auto value.
