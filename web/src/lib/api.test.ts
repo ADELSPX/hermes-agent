@@ -303,7 +303,7 @@ describe("api.getSessionMessages", () => {
     await api.getSessionMessages("session/one");
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/sessions/session%2Fone/messages",
+      "/api/sessions/session%2Fone/messages?limit=500&order=latest",
       expect.objectContaining({ credentials: "include" }),
     );
   });
@@ -322,7 +322,7 @@ describe("api.getSessionMessages", () => {
     await api.getSessionMessages("sid", "worker");
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/sessions/sid/messages?profile=worker",
+      "/api/sessions/sid/messages?limit=500&order=latest&profile=worker",
       expect.objectContaining({ credentials: "include" }),
     );
   });

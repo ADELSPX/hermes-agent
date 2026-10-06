@@ -23,7 +23,6 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { Button } from "@nous-research/ui/ui/components/button";
-import { Spinner } from "@nous-research/ui/ui/components/spinner";
 import { Typography } from "@nous-research/ui/ui/components/typography/index";
 import { cn } from "@/lib/utils";
 import { Copy, PanelRight, RotateCcw, X } from "lucide-react";
@@ -33,12 +32,13 @@ import { useNavigate, useSearchParams } from "react-router";
 
 import { ChatSidebar } from "@/components/ChatSidebar";
 import { ChatSessionList } from "@/components/ChatSessionList";
-import { MessageList } from "@/components/SessionTranscript";
+import { PtyEndedOverlay } from "@/components/PtyEndedOverlay";
+import { ResumeTranscriptPanel, useResumeTranscript } from "@/components/ResumeTranscriptPanel";
 import { usePageHeader } from "@/contexts/usePageHeader";
 import { useI18n } from "@/i18n";
-import { api, type SessionMessage } from "@/lib/api";
-import { readStoredWorkspace, writeStoredWorkspace } from "@/lib/chat-workspaces";
+import { api } from "@/lib/api";
 import { latchChatActivation } from "@/lib/chat-activation";
+import { readStoredWorkspace, writeStoredWorkspace } from "@/lib/chat-workspaces";
 import { copyTextToClipboard } from "@/lib/clipboard";
 import { normalizeSessionTitle } from "@/lib/chat-title";
 import { createPtyCompositionForwarder } from "@/lib/pty-composition";
@@ -87,9 +87,7 @@ import { maybeReloadForLoopbackWsAuthFailure } from "@/lib/dashboard-auth-reload
 import {
   PTY_GAVE_UP_BANNER,
   PTY_RECONNECTING_BANNER,
-  PTY_SESSION_ENDED_MESSAGE,
   PTY_SESSION_ENDED_TERMINAL_LINE,
-  PTY_START_FAILED_MESSAGE,
   PTY_TOKEN_MISSING_BANNER,
   ptyReconnectExhausted,
   ptyRejectionBanner,
@@ -105,6 +103,14 @@ import { PluginSlot } from "@/plugins";
 import { useTheme } from "@/themes";
 import { useProfileScope } from "@/contexts/useProfileScope";
 import { errorMessage } from "@/lib/api-error";
+import {
+  DEFAULT_TERMINAL_BACKGROUND,
+  DEFAULT_TERMINAL_FOREGROUND,
+  buildTerminalTheme,
+  terminalFontSizeForWidth,
+  terminalLineHeightForWidth,
+  terminalTierWidthPx,
+} from "@/lib/chat-terminal";
 
 // Per-tab keep-alive identity (`?attach=`): lives in pty-attach-token.ts so a
 // second tab — including a Chrome "Duplicate tab" — gets its own PTY instead of
@@ -122,57 +128,6 @@ function generateChannelId(scope?: string): string {
   return `${prefix}-${Math.random().toString(36).slice(2)}-${Date.now().toString(
     36,
   )}`;
-}
-
-// Colors for the terminal body.  Matches the dashboard's dark teal canvas
-// with cream foreground — we intentionally don't pick monokai or a loud
-// theme, because the TUI's skin engine already paints the content; the
-// terminal chrome just needs to sit quietly inside the dashboard.
-const DEFAULT_TERMINAL_BACKGROUND = "#000000";
-const DEFAULT_TERMINAL_FOREGROUND = "#f0e6d2";
-
-function buildTerminalTheme(background: string, foreground: string) {
-  return {
-    background,
-    foreground,
-    cursor: foreground,
-    cursorAccent: background,
-    selectionBackground:
-      foreground.length === 7 ? `${foreground}44` : foreground,
-  };
-}
-
-/**
- * CSS width for xterm font tiers.
- *
- * Prefer the terminal host's `clientWidth` — Chrome DevTools device mode often
- * keeps `window.innerWidth` at the full desktop value while the *drawn* layout
- * is phone-sized, which made us pick desktop font sizes (~14px) and look huge.
- */
-function terminalTierWidthPx(host: HTMLElement | null): number {
-  if (typeof window === "undefined") return 1280;
-  const fromHost = host?.clientWidth ?? 0;
-  if (fromHost > 2) return Math.round(fromHost);
-  const doc = document.documentElement?.clientWidth ?? 0;
-  const vv = window.visualViewport;
-  const inner = window.innerWidth;
-  const vvw = vv?.width ?? inner;
-  const layout = Math.min(inner, vvw, doc > 0 ? doc : inner);
-  return Math.max(1, Math.round(layout));
-}
-
-function terminalFontSizeForWidth(layoutWidthPx: number): number {
-  if (layoutWidthPx < 300) return 7;
-  if (layoutWidthPx < 360) return 8;
-  if (layoutWidthPx < 420) return 9;
-  if (layoutWidthPx < 520) return 10;
-  if (layoutWidthPx < 720) return 11;
-  if (layoutWidthPx < 1024) return 12;
-  return 14;
-}
-
-function terminalLineHeightForWidth(layoutWidthPx: number): number {
-  return layoutWidthPx < 1024 ? 1.02 : 1.15;
 }
 
 export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
@@ -356,12 +311,6 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
     scope: string;
     title: string | null;
   }>({ scope: "", title: null });
-  const [resumeTranscript, setResumeTranscript] = useState<{
-    sessionId: string;
-    profile: string;
-    messages: SessionMessage[] | null;
-    error: string | null;
-  } | null>(null);
   const { t } = useI18n();
   const closeMobilePanel = useCallback(() => setMobilePanelOpenRaw(false), []);
   const modelToolsLabel = useMemo(
@@ -396,6 +345,9 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
   // management profile. Changing it remounts the terminal (key below /
   // effect dep) so the user explicitly starts a fresh scoped session.
   const { profile: scopedProfile } = useProfileScope();
+  // Transcript hydration for a resumed session (#60868): fetch the stored
+  // messages while the PTY attaches, so the conversation area is never blank.
+  const resumeTranscript = useResumeTranscript(resumeParam, scopedProfile);
   // Workspace a FRESH chat starts in (`/api/pty?cwd=`), persisted per
   // management profile (a phone remembers the repo it drives). The connect
   // effect reads storage directly, so changing the picker never respawns the
@@ -458,37 +410,6 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
       cancelled = true;
     };
   }, [resumeParam, scopedProfile, handleSessionTitleChange]);
-
-  useEffect(() => {
-    if (!resumeParam) return;
-
-    let cancelled = false;
-
-    api
-      .getSessionMessages(resumeParam, scopedProfile)
-      .then((resp) => {
-        if (cancelled) return;
-        setResumeTranscript({
-          sessionId: resumeParam,
-          profile: scopedProfile,
-          messages: resp.messages,
-          error: null,
-        });
-      })
-      .catch((err: Error) => {
-        if (cancelled) return;
-        setResumeTranscript({
-          sessionId: resumeParam,
-          profile: scopedProfile,
-          messages: null,
-          error: err.message || "failed to load messages",
-        });
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [resumeParam, scopedProfile]);
 
   useEffect(() => {
     if (!resumeParam) return;
@@ -1957,13 +1878,6 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
       portalRoot,
     );
 
-  const activeTranscript =
-    resumeTranscript?.sessionId === resumeParam &&
-    resumeTranscript.profile === scopedProfile
-      ? resumeTranscript
-      : null;
-  const transcriptLoading = Boolean(resumeParam && !activeTranscript);
-
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-2">
       <PluginSlot name="chat:top" />
@@ -1995,47 +1909,11 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
             boxShadow: "0 8px 32px rgba(0, 0, 0, 0.4)",
           }}
         >
-          {resumeParam && (
-            <div className="mb-2 flex max-h-[min(36vh,24rem)] shrink-0 flex-col overflow-hidden rounded border border-white/10 bg-black/35 text-white/85">
-              <div className="flex min-h-8 items-center justify-between gap-2 border-b border-white/10 px-3 py-1.5">
-                <span className="text-display text-[0.6875rem] tracking-wider text-white/60">
-                  {t.sessions.history}
-                </span>
-                {transcriptLoading ? (
-                  <Spinner className="text-sm text-white/60" />
-                ) : activeTranscript?.messages ? (
-                  <span className="font-mono-ui text-[0.6875rem] text-white/45">
-                    {activeTranscript.messages.length} {t.common.msgs}
-                  </span>
-                ) : null}
-              </div>
-              <div className="min-h-0 overflow-y-auto p-2">
-                {transcriptLoading && (
-                  <div className="flex items-center justify-center py-6 text-xs text-white/60">
-                    <Spinner className="text-sm" />
-                  </div>
-                )}
-                {activeTranscript?.error && (
-                  <p className="py-4 text-center text-xs text-destructive">
-                    {activeTranscript.error}
-                  </p>
-                )}
-                {activeTranscript?.messages &&
-                  activeTranscript.messages.length === 0 && (
-                    <p className="py-4 text-center text-xs text-white/50">
-                      {t.sessions.noMessages}
-                    </p>
-                  )}
-                {activeTranscript?.messages &&
-                  activeTranscript.messages.length > 0 && (
-                    <MessageList
-                      messages={activeTranscript.messages}
-                      className="flex flex-col gap-2 pr-1"
-                    />
-                  )}
-              </div>
-            </div>
-          )}
+          <ResumeTranscriptPanel
+            transcript={resumeTranscript}
+            sessionId={resumeParam}
+            profile={scopedProfile}
+          />
 
           <div
             ref={hostRef}
@@ -2090,35 +1968,11 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
             </div>
           )}
 
-          {/* NS-504: the agent process exited (e.g. `/exit` or a new session).
-              Offer an in-place restart so the user never has to refresh the
-              whole page to get a working chat back. */}
           {ptyState === "ended" && (
-            <div className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-3 bg-black/60">
-              <div className="max-w-[min(32rem,calc(100vw-3rem))] text-center text-sm tracking-wide text-white/80">
-                {endedReason === "start-failed"
-                  ? PTY_START_FAILED_MESSAGE
-                  : PTY_SESSION_ENDED_MESSAGE}
-              </div>
-              <div className="flex flex-wrap justify-center gap-2">
-                <Button
-                  onClick={startFreshPty}
-                  prefix={<RotateCcw className="h-4 w-4" />}
-                  aria-label="Start a new chat session"
-                >
-                  Start new session
-                </Button>
-                {endedReason === "exited" && (
-                  <Button
-                    outlined
-                    onClick={() => navigate("/logs")}
-                    aria-label="Open logs"
-                  >
-                    Open logs
-                  </Button>
-                )}
-              </div>
-            </div>
+            <PtyEndedOverlay
+              endedReason={endedReason}
+              startFreshPty={startFreshPty}
+            />
           )}
 
           <Button
