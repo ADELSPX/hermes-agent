@@ -1,12 +1,13 @@
+import { requestGatewayForAgent } from '@/store/gateway'
 import {
   $activeGatewayProfile,
+  $newChatProfile,
+  type AgentProfileRoute,
   ensureGatewayAgent,
   ensureGatewayProfile,
-  $newChatProfile,
   normalizeProfileKey,
   resolveNewChatOwnerRoute
 } from '@/store/profile'
-import { requestGatewayForAgent } from '@/store/gateway'
 import {
   $currentCwdExplicit,
   $currentFastMode,
