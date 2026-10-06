@@ -205,7 +205,7 @@ def assemble_api_request(
     # assistant(tool_calls) turn otherwise trips OpenAI-compatible Qwen-derived
     # chat templates (LM Studio: "No user query found in messages.") and
     # Anthropic's non-user-leading rejection. No-op on well-formed payloads.
-    from agent.agent_runtime_helpers import ensure_user_leads_api_messages
+    from agent.agent_runtime_leading_user import ensure_user_leads_api_messages
 
     if ensure_user_leads_api_messages(api_messages):
         logger.info(
