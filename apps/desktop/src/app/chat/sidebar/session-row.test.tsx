@@ -483,6 +483,7 @@ describe('foreign live activity caption', () => {
       last_activity_description: 'executing tool: terminal',
       title: 'Cron Feed'
     })
+
     act(() => {
       $sessions.set([session as never])
       $sessionStates.set({})
@@ -498,6 +499,7 @@ describe('foreign live activity caption', () => {
       last_activity_description: 'executing tool: terminal',
       title: 'Local'
     })
+
     act(() => {
       $sessions.set([session as never])
       $sessionStates.set({})
@@ -514,6 +516,7 @@ describe('foreign live activity caption', () => {
       last_activity_description: 'executing tool: terminal',
       title: 'Idle'
     })
+
     act(() => {
       $sessions.set([session as never])
       $sessionStates.set({})

@@ -2448,21 +2448,6 @@ export function pruneSecondaryGateways(keep: Set<string>): void {
   restoreActiveToPrimaryIfEvicted()
 }
 
-/** Open sockets for every profile in `keep` that isn't open yet, then prune
- *  the rest. The open half breaks the old circularity: a profile whose row is
- *  DB-live (foreign liveness — a cron run, a CLI one-shot) gets a socket
- *  without any user intent, so its serve's stream events and active_list
- *  reach the renderer and its rows stay honest. Pruning still applies, so a
- *  profile whose last DB-fresh row ages out (300s window) releases its
- *  socket on the next recompute. */
-export function reconcileLiveGateways(keep: Set<string>): void {
-  for (const profile of keep) {
-    void openGatewayForProfile(profile).catch(() => undefined)
-  }
-
-  pruneSecondaryGateways(keep)
-}
-
 function closeSecondariesWhere(shouldClose: (entry: Secondary) => boolean): void {
   for (const [scope, entry] of [...g.secondaries]) {
     if (!shouldClose(entry)) {

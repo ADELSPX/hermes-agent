@@ -737,6 +737,24 @@ export function resetTypingActivityTracking(): void {
   lastRendererInputAt = 0
 }
 
+/** True when the poll's row must NOT overwrite renderer runtime state:
+ * a DB-derived foreign row never publishes runtime state (the
+ * `$foreignLiveSessionIds` fallback owns its dot; a phantom runtime here
+ * would make the row's dot source flap between the two rungs), and a row
+ * superseded by a stream event mid-poll must not clobber what the newer
+ * event wrote — see the two guards in `rehydrateLiveSessionStatuses`. */
+function rehydrateRowIsStale(
+  session: LiveSessionStatusItem,
+  existing: ClientSessionState | undefined,
+  stateAtRequestRow: ClientSessionState | undefined
+): boolean {
+  if (session.foreign) {
+    return true
+  }
+
+  return existing !== stateAtRequestRow
+}
+
 /** Restore sidebar liveness after a renderer/backend reconnect. Stream events
  * normally own these states, but events emitted while Desktop was disconnected
  * cannot be replayed. `session.active_list` is the authoritative in-memory
@@ -780,16 +798,12 @@ export function rehydrateLiveSessionStatuses(
     // owns its dot, and creating a phantom runtime would make the row's dot
     // source flap between the two rungs. A foreign row whose id HAS a real
     // runtime in this renderer is event-owned from here: the snapshot must
-    // not clobber what the stream path wrote.
-    if (session.foreign) {
-      continue
-    }
-
-    // The active-list response is an async snapshot. Stream events can start
-    // or finish this turn after the request begins but before its response is
-    // applied. In that case the event state is newer: an old idle row must not
-    // finish a live turn, and an old working row must not revive a terminal one.
-    if (existing !== stateAtRequest[runtimeSessionId]) {
+    // not clobber what the stream path wrote. The active-list response is an
+    // async snapshot: stream events can start or finish this turn after the
+    // request begins but before its response is applied, and then the event
+    // state is newer — an old idle row must not finish a live turn, and an
+    // old working row must not revive a terminal one.
+    if (rehydrateRowIsStale(session, existing, stateAtRequest[runtimeSessionId])) {
       continue
     }
 

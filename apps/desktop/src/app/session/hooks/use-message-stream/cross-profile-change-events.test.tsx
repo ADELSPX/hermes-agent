@@ -3,8 +3,8 @@ import { QueryClient } from '@tanstack/react-query'
 import { act, cleanup } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { $activeGatewayProfile } from '@/store/profile'
 import { $cronChangeTick, $sessionsChangeTick } from '@/store/live-sync'
+import { $activeGatewayProfile } from '@/store/profile'
 import { $sessionStates } from '@/store/session-states'
 
 import { type MessageStreamHarness, renderMessageStream } from './test-harness'

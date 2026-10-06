@@ -1,10 +1,9 @@
 import { afterEach, describe, expect, it } from 'vitest'
 
+import { $foreignLiveSessionIds } from './foreign-live'
 import { $sessions } from './session'
 import { $sessionDotStateById } from './session-dot-state'
 import { $sessionStates } from './session-states'
-
-import { $foreignLiveSessionIds } from './foreign-live'
 
 const row = (id: string, isActive: boolean) => ({
   id,

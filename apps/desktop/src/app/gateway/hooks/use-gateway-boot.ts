@@ -34,6 +34,7 @@ import {
 } from '@/store/boot'
 import { resetBackgroundPollingGuard } from '@/store/composer-status'
 import { noteBackendDrop, noteBackendExited } from '@/store/desktop-metrics'
+import { $foreignLiveSessionIds } from '@/store/foreign-live'
 import {
   $gateway,
   activeGateway,
@@ -49,7 +50,6 @@ import {
   isActivePrimary,
   liveSecondaryConnectionIds,
   parkSecondariesForRetiredBackend,
-  reconcileLiveGateways,
   reconnectSecondaryGateways,
   reportPrimaryGatewayState,
   type ScopedServerRequest,
@@ -57,6 +57,7 @@ import {
   setPrimaryGatewayConnection,
   touchSecondaryGateways
 } from '@/store/gateway'
+import { reconcileLiveGateways } from '@/store/gateway-live-reconcile'
 import { type GatewayReconnectOptions, reconnectGateway, registerGatewayReconnect } from '@/store/gateway-reconnect'
 import {
   $gatewaySwitching,
@@ -90,7 +91,6 @@ import {
   setSessionsLoading
 } from '@/store/session'
 import { stampSecondaryProfileOwner } from '@/store/session-event-provenance'
-import { $foreignLiveSessionIds } from '@/store/foreign-live'
 import {
   $attentionSessionIds,
   $sessionOwnerHoldRevision,
@@ -1374,6 +1374,7 @@ export function useGatewayBoot({
         ...$attentionSessionIds.get(),
         ...$foreignLiveSessionIds.get()
       ])
+
       const scopes = liveSessionScopes()
 
       for (const session of $sessions.get()) {
