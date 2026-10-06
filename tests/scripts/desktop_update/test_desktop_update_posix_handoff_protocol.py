@@ -30,6 +30,7 @@ import pytest
 # failing collection on Windows
 fcntl = pytest.importorskip("fcntl")  # windows-footgun: ok
 
+from tests.scripts.desktop_update.legacy_desktop_reader import legacy_read
 from tests.scripts.desktop_update.lineage_rule_cases import ENV_CASES, RULE_CASES
 from tests.scripts.desktop_update.lineage_rule_cases import FACTS as LINEAGE_FACTS
 from tests.scripts.desktop_update.test_desktop_update_posix_marker import POSIX, _calls, _ct, _install
@@ -530,3 +531,50 @@ def test_line_two_is_refreshed_only_while_the_claim_is_still_ours(tmp_path, proc
     marker.write_text(foreign, encoding="utf-8")
     subprocess.run(["bash", "-c", run + "marker_locked marker_refresh_locked"], check=True, timeout=30)
     assert marker.read_text(encoding="utf-8-sig") == foreign
+
+
+# ── old packaged Desktop after the orchestrator dies ────────────────────────
+
+
+def test_old_desktop_stays_parked_after_the_orchestrator_is_killed_while_the_update_holds_the_lock(tmp_path):
+    """SIGKILL the hand-off once its delegate (`hermes update`) runs and a completion survivor holds
+    the checkout lock. The old reader judges line 1 alone, so a live custodian must take line 1
+    and keep line 2 young until custody ends -- through the delegate and the survivor -- and only
+    then release the marker."""
+    home, install = _install(tmp_path, legacy=True)
+    marker = home / ".hermes-update-in-progress"
+    hold, completion = tmp_path / "update-hold", tmp_path / "release-completion"
+    lock = install / ".hermes-update.lock"
+    env = _env(tmp_path, home, HANDOFF_HOLD=str(hold), HANDOFF_COMPLETION=str(completion), HANDOFF_CHECKOUT_LOCK=str(lock))
+    script = subprocess.Popen([bash := shutil.which("bash"), str(POSIX), "--daemonized", "--no-ui", "--install-root", str(install),
+                               "--self-test-refresh-every", "1"], env=env, cwd=tmp_path,
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    try:
+        deadline = time.monotonic() + 60
+        while not Path(str(hold) + ".pid").exists():
+            assert time.monotonic() < deadline and script.poll() is None
+            time.sleep(0.05)
+        delegate = int(Path(str(hold) + ".pid").read_text(encoding="utf-8"))
+        assert f"delegate:{delegate} " in marker.read_text(encoding="utf-8-sig")
+        script.kill(); script.wait()
+        for phase in ("delegate", "survivor"):
+            for _ in range(3):
+                time.sleep(1.5)
+                seen = legacy_read(home)
+                assert seen["live"] is not None and seen["kept"], (phase, seen)
+            if phase == "delegate":
+                hold.touch()
+                deadline = time.monotonic() + 30
+                while Path(f"/proc/{delegate}").exists() and "Z" not in Path(f"/proc/{delegate}/stat").read_text(encoding="utf-8").rsplit(") ", 1)[1][:1]:
+                    assert time.monotonic() < deadline
+                    time.sleep(0.05)
+        probe = subprocess.run([bash, "-c", f"log() {{ :; }}; MARKER=/dev/null INSTALL_ROOT={shlex.quote(str(install))}; "
+                                f". {shlex.quote(str(MARKER_SH))}; checkout_lock_held"], timeout=30)
+        assert probe.returncode == 0, "the survivor should still hold the checkout lock"
+    finally:
+        hold.touch(); completion.touch()
+    deadline = time.monotonic() + 30
+    while marker.exists():
+        assert time.monotonic() < deadline, marker.read_text(encoding="utf-8-sig")
+        time.sleep(0.1)
+    assert legacy_read(home)["live"] is None
