@@ -36,6 +36,7 @@ import { $pinnedSessionIds } from '@/store/layout'
 import { $notifications, dismissNotification } from '@/store/notifications'
 import {
   $activeGatewayProfile,
+  $gatewaySwapTarget,
   $newChatConnectionId,
   $newChatProfile,
   $newChatRoute,
@@ -1364,6 +1365,7 @@ describe('createBackendSessionForSend profile routing', () => {
     cleanup()
     $newChatProfile.set(null)
     $newChatRoute.set(null)
+    $gatewaySwapTarget.set(null)
     $activeGatewayProfile.set('default')
     $projectScope.set(ALL_PROJECTS)
     $projectTree.set([])
@@ -1388,6 +1390,28 @@ describe('createBackendSessionForSend profile routing', () => {
     })
 
     expect(params).toMatchObject({ profile: 'coder' })
+  })
+
+  // Regression (#81817 / #79406): ⌘N during a gateway profile switch. The
+  // per-profile quick-create selection is already cleared ($newChatProfile
+  // null) while the swap is still opening the TARGET profile's backend, so
+  // the old code fell back to the still-live PREVIOUS profile — the chat then
+  // bound to (and inherited the cwd of) the profile the user just left. The
+  // pending swap target is the visible intent and must win the fallback.
+  it('routes a plain new chat to the pending gateway swap target during a profile switch', async () => {
+    const params = await createWith(
+      () => {
+        $activeGatewayProfile.set('coder')
+        $newChatProfile.set(null)
+      },
+      // The swap is in flight while the UI is already live: set the pending
+      // target AFTER mount (a switch that finishes clears it in `finally`).
+      () => {
+        $gatewaySwapTarget.set('analyst')
+      }
+    )
+
+    expect(params).toMatchObject({ profile: 'analyst' })
   })
 
   it('honours an explicit per-profile "+" selection', async () => {

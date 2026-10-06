@@ -364,11 +364,16 @@ async function desktopSessionCreateParams(
     provider: isManualSelection ? $currentProvider.get().trim() : ''
   }
 
+  // A pending gateway swap (#81817): ⌘N clears the per-profile quick-create
+  // selection while the switch is still opening its target backend — the
+  // visible intent is the pending target, not the still-live previous profile,
+  // or the new chat binds to (and inherits the cwd of) the profile the user
+  // just left.
   const profile =
     capturedRoute?.profile ||
     requestedProfile ||
     $newChatProfile.get() ||
-    normalizeProfileKey($activeGatewayProfile.get())
+    normalizeProfileKey($gatewaySwapTarget.get() || $activeGatewayProfile.get())
 
   if (capturedRoute) {
     await ensureGatewayAgent(capturedRoute.connectionId, profile)
@@ -820,7 +825,13 @@ export function useSessionActions({
         // reduce the owner to a bare profile name that later RPCs dial on a
         // different socket than the one that minted the runtime.
         const capturedRoute = resolveNewChatOwnerRoute()
-        const capturedProfile = $newChatProfile.get() || normalizeProfileKey($activeGatewayProfile.get())
+        // A pending gateway swap (#81817): the draft's quick-create selection
+        // is cleared while the swap is still opening the TARGET profile's
+        // backend, so reading only the live atoms binds the new chat to (and
+        // inherits the cwd of) the profile the user just left. The pending
+        // swap target is the visible intent and wins the fallback.
+        const capturedProfile =
+          $newChatProfile.get() || normalizeProfileKey($gatewaySwapTarget.get() || $activeGatewayProfile.get())
         const legacyProfileIntent = isLegacyNewChatProfile(capturedProfile)
 
         const params = {
