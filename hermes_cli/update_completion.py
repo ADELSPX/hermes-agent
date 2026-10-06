@@ -346,6 +346,8 @@ def _prepare(request: dict, request_path: Path, result_path: Path) -> int:
     # The foreign-owned-venv refusal runs in the parent BEFORE the swap (update_cmd_commit
     # .preflight_refusal); the tail was armed there too, so this re-arm is an idempotent backstop.
     arm_completion(root)
+    from hermes_cli.gitlock import convert_treeless_checkout_first
+    convert_treeless_checkout_first(root)
     with receipt.worker_context(update_id):
         try:
             # This file runs from the new tree, so its lockfile carries the new
