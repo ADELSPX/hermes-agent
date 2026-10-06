@@ -111,6 +111,42 @@ def test_lock_fd_reaches_local_mutators_only(repo, tmp_path, monkeypatch):
     assert "yes" in out_stash.read_text(encoding="utf-8-sig").split(), "a local mutator's child lost the checkout lock"
 
 
+@pytest.mark.platforms("posix")
+@pytest.mark.live_system_guard_bypass  # kills the orphaned hook child it planted
+def test_a_background_hook_never_keeps_a_completed_update_locked(repo, tmp_path):
+    """F1: a local mutator holds the lock fd, and a repository hook it ran inherited that fd; a
+    hook that backgrounds a daemon kept the checkout locked after the merge returned and the
+    owner released, so the next update was refused. Once the owner releases, a contender acquires."""
+    import signal
+
+    base = _git(repo, "rev-parse", "HEAD")
+    (repo / "f.txt").write_text("two\n", encoding="utf-8")
+    _git(repo, "commit", "-qam", "two")
+    target = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "reset", "-q", "--hard", base)
+    pid_file = tmp_path / "hook-child.pid"
+    hook = repo / ".git" / "hooks" / "post-merge"
+    hook.write_text(f"#!/bin/sh\nsleep 60 </dev/null >/dev/null 2>&1 &\necho $! > {pid_file}\n", encoding="utf-8")
+    hook.chmod(0o755)
+    from hermes_cli.update_custody import run_git
+
+    lock = ul.UpdateLock(path=tmp_path / "marker", install_root=repo)
+    assert lock.acquire()
+    try:
+        merged = run_git(["git"], ["merge", "--ff-only", target], cwd=repo, capture_output=True, text=True, timeout=30)
+        assert merged.returncode == 0, merged.stderr
+    finally:
+        lock.release()
+    contender = ul.UpdateLock(path=tmp_path / "next-marker", install_root=repo)
+    try:
+        assert (repo / "f.txt").read_text(encoding="utf-8") == "two\n"
+        assert contender.acquire(), f"a background git hook kept the completed update's checkout locked: {contender.holder}"
+    finally:
+        contender.release()
+        if pid_file.exists():
+            os.kill(int(pid_file.read_text(encoding="utf-8")), signal.SIGKILL)  # windows-footgun: ok - POSIX-only test
+
+
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="parent-death signal is Linux-only")
 def test_network_git_dies_with_its_killed_owner(repo, tmp_path):
     """The fd-less fetch must not keep rewriting refs after the owner died (the next owner's lease)."""
@@ -427,6 +463,53 @@ def test_a_group_kill_of_the_caller_stops_the_whole_build(repo, tmp_path):
 
 
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="POSIX sessions + /proc")
+@pytest.mark.live_system_guard_bypass  # the caller's group kill is the scenario under test
+def test_a_group_kill_of_the_caller_keeps_custody_until_a_detached_writer_is_gone(repo, tmp_path):
+    """E: the completion child ``killpg``s its own group on interruption; the launcher holding
+    the lock fd for node's tree was in that group and died with it, so a descendant in a session
+    of its own kept writing while a contender owned the checkout. A contender must only acquire
+    once that writer has stopped."""
+    import contextlib
+    import signal
+
+    beat = tmp_path / "beat"
+    writer = (f"import os, pathlib, time; os.setsid(); os.closerange(3, 4096); p = pathlib.Path({str(beat)!r})\n"  # windows-footgun: ok - Linux-only test
+              "for i in range(300):\n    p.write_text(f'{os.getpid()} {i}'); time.sleep(0.1)")
+    caller = textwrap.dedent(f"""
+        import subprocess, sys
+        sys.path.insert(0, {str(REPO_ROOT)!r})
+        from pathlib import Path
+        from hermes_cli import update_lock as ul
+        from hermes_cli.update_custody import contained_command
+        repo = Path({str(repo)!r})
+        lock = ul.UpdateLock(path=Path({str(tmp_path / "marker")!r}), install_root=repo)
+        assert lock.acquire()
+        with contained_command({_node_starting(writer, then="time.sleep(60)")!r}, root=repo) as (argv, custody):
+            subprocess.Popen(argv, stdin=subprocess.DEVNULL, **custody).wait()
+    """)
+    owner = subprocess.Popen([sys.executable, "-c", caller], start_new_session=True)
+    deadline = time.monotonic() + 20
+    while not beat.exists() and time.monotonic() < deadline:
+        time.sleep(0.1)
+    assert beat.exists(), "the detached writer never started"
+    os.killpg(owner.pid, signal.SIGKILL)  # windows-footgun: ok - Linux-only test
+    owner.wait(timeout=10)
+    contender = ul.UpdateLock(path=tmp_path / "next-marker", install_root=repo)
+    deadline = time.monotonic() + 20
+    while not contender.acquire():
+        assert time.monotonic() < deadline, "the checkout stayed locked after the group kill"
+        time.sleep(0.1)
+    try:
+        seen = beat.read_text(encoding="utf-8")
+        time.sleep(1)
+        assert beat.read_text(encoding="utf-8") == seen, "a detached build writer kept writing under the next owner"
+    finally:
+        contender.release()
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(int(beat.read_text(encoding="utf-8").split()[0]), signal.SIGKILL)  # windows-footgun: ok - Linux-only test
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="POSIX sessions + /proc")
 @pytest.mark.parametrize("platform", [None, "darwin"], ids=["subreaper", "ps-walk"])
 def test_a_detached_grandchild_outliving_node_dies_before_the_build_returns(repo, tmp_path, platform):
     """N13/L1: a descendant that left node's process group (its own session) and outlives node
@@ -492,10 +575,12 @@ class _FakeWinCall:
         return self.answer(*args) if callable(self.answer) else self.answer
 
 
-def _run_join_launcher(monkeypatch, *, stray_polls: int):
+def _run_join_launcher(monkeypatch, *, stray_polls: int, escaped: bool = False, rebind: int = 1):
     """Execute the real ``_JOIN_JOB`` launcher source against a recording kernel32/ntdll and a
     fake leader process. The command's job reports ``stray_polls`` live processes (a build
-    grandchild still writing) before its tree is empty. Returns the ordered events."""
+    grandchild still writing) before its tree is empty. ``escaped``: the suspended command
+    starts outside the update job (Store Python's breakaway), and assigning it there answers
+    ``rebind``. Returns the ordered events."""
     import ctypes
     import types
 
@@ -509,11 +594,19 @@ def _run_join_launcher(monkeypatch, *, stray_polls: int):
         live["left"] -= 1
         return 1
 
+    placed = {"update job": not escaped}
+
+    def assign(job, proc):
+        if tuple(getattr(a, "value", a) for a in (job, proc)) != (11, 33):
+            return 1
+        placed["update job"] = bool(rebind)
+        return rebind
+
     def in_job(proc, job, inside):
-        inside._obj.value = 1
+        inside._obj.value = int(placed["update job"])
         return 1
 
-    kernel32 = {"AssignProcessToJobObject": 1, "GetCurrentProcess": 7, "CloseHandle": 1, "CreateJobObjectW": 22,
+    kernel32 = {"AssignProcessToJobObject": assign, "GetCurrentProcess": 7, "CloseHandle": 1, "CreateJobObjectW": 22,
                 "SetInformationJobObject": 1, "TerminateJobObject": 1, "QueryInformationJobObject": query,
                 "IsProcessInJob": in_job}
     dlls = {"kernel32": types.SimpleNamespace(**{n: _FakeWinCall(n, events, a) for n, a in kernel32.items()}),
@@ -562,6 +655,28 @@ def test_the_windows_build_launcher_reaps_the_command_tree_before_it_returns(mon
     assert len(polls) == 3 and polls[0] > _index(events, "TerminateJobObject", tree), \
         "the launcher returned while a build descendant was still alive"
     assert events[-1] == ("exit", 3), events
+
+
+def test_a_build_command_that_starts_outside_the_update_job_is_put_in_it_before_it_runs(monkeypatch, tmp_path):
+    """F80: under Store Python the suspended node starts outside the update job (desktop-app
+    breakaway through a job that permits breakaway); refusing it made every Node build of the
+    update fail. It is assigned to the update job while suspended and runs once it is in."""
+    monkeypatch.chdir(tmp_path)  # a refusal writes its report file (argv[2]) relative to here
+    events = _run_join_launcher(monkeypatch, stray_polls=0, escaped=True)
+    assert _index(events, "AssignProcessToJobObject", 11, 33) < _index(events, "NtResumeProcess"), \
+        "the command ran before it was in the update job"
+    assert events[-1] == ("exit", 3), events
+
+
+def test_a_build_command_the_update_job_will_not_take_never_runs(monkeypatch, tmp_path):
+    """F54 kept: a suspended command outside the job that Windows also refuses to assign to it
+    is killed before its first instruction and the launcher refuses."""
+    from hermes_cli.update_custody import _REFUSED_EXIT
+
+    monkeypatch.chdir(tmp_path)
+    events = _run_join_launcher(monkeypatch, stray_polls=0, escaped=True, rebind=0)
+    assert not any(e[0] == "NtResumeProcess" for e in events) and ("kill",) in events, events
+    assert events[-1] == ("exit", _REFUSED_EXIT), events
 
 
 def test_the_windows_build_launcher_returns_at_once_when_nothing_was_left(monkeypatch):

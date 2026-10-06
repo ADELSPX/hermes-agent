@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Collection, Optional
 
 from hermes_cli._early_recovery import (
-    ZIP_SWAP_JOURNAL, _drop_path, restore_interrupted_zip_swap, write_zip_swap_journal, zip_entry_identity,
+    ZIP_SWAP_JOURNAL, _keep_aside, restore_interrupted_zip_swap, write_zip_swap_journal, zip_entry_identity,
     zip_swap_owner_lock)
 
 # Log-record parity with the origin module.
@@ -86,34 +86,34 @@ def _stage_replacement(src: str, dst: str, on_created=None) -> str:
     # clearing leftovers, else deleting it then failing to stage (disk exhaustion) leaves a hole.
     if not os.path.lexists(dst) and os.path.lexists(backup):  # a dangling symlink backup is still one (Z3)
         os.rename(backup, dst)
-    # Fail closed: a leftover backup that survives would later be taken for this swap's own backup
-    # (rollback and journal recovery put it back as the live entry).
+    # Nothing this run made is there yet: an entry at either suffix is not provably the update's (a
+    # user's file created after the clean-tree preflight, or a pre-journal crash's), so it is kept aside,
+    # never deleted (F78). Neither may stay: a backup would later be taken for this swap's own.
     for leftover in (staging, backup):
-        _drop_path(Path(leftover))
         if os.path.lexists(leftover):
-            raise OSError(f"could not remove the leftover {leftover}")
+            print(f"  ⚠ Kept {leftover} aside as {_keep_aside(Path(leftover)).name}: nothing proves it is "
+                  "this update's.")
     # Never through the reusable pathname: copy2 opens it following a symlink planted after the sweep
     # (review Z2). copytree's own os.mkdir is exclusive and never follows; a file is created the same way.
     if os.path.isdir(src):
         os.mkdir(staging)
-        made = zip_entry_identity(staging)
+    else:
+        _copy_file_exclusive(src, staging)
+    made = zip_entry_identity(staging)
+    try:
         if on_created is not None:
             on_created(staging)
         if zip_entry_identity(staging) != made:  # swapped while the journal recorded it: never fill that
-            raise OSError(f"the staging directory {staging} was replaced while it was being created")
-        try:
+            raise OSError(f"the staging entry {staging} was replaced while it was being created")
+        if os.path.isdir(src):
             shutil.copytree(src, staging, dirs_exist_ok=True)
-        except BaseException:
-            # A failed stage leaves nothing (a full disk must not shrink further on the retry). Best
-            # effort, like _discard_staged: the journal's recovery drops what this cannot.
-            with suppress(OSError):
-                if zip_entry_identity(staging) == made:
-                    _remove_path(staging)
-            raise
-    else:
-        _copy_file_exclusive(src, staging)
-        if on_created is not None:
-            on_created(staging)
+    except BaseException:
+        # A failed stage leaves nothing of its own (a full disk must not shrink further on the retry).
+        # Best effort, like _discard_staged: the journal's recovery drops what this cannot.
+        with suppress(OSError):
+            if zip_entry_identity(staging) == made:
+                _remove_path(staging)
+        raise
     return staging
 
 
@@ -151,11 +151,9 @@ def _discard_staged(staged) -> None:
 
 
 def _hardlink_backup(path: str, backup: str) -> bool:
-    """Hardlink ``path`` to ``backup`` (a stale backup is replaced); False where links are unsupported.
-    A link is all-or-nothing, so a killed swap never leaves a short backup the restore would put back."""
+    """Hardlink ``path`` to ``backup``; False where links are unsupported. A link is all-or-nothing, so a
+    killed swap never leaves a short backup the restore would put back."""
     try:
-        if os.path.lexists(backup):
-            _remove_path(backup)
         os.link(path, backup)
     except OSError:
         return False
@@ -200,6 +198,8 @@ def _commit_staged_replacements(staged, *, on_committed=None, tag: str = "") -> 
     try:
         for staging, dst in staged:
             backup = f"{dst}.hermes-update-old"
+            if os.path.lexists(backup):  # appeared since staging set leftovers aside: not ours to replace (F78)
+                raise FileExistsError(f"{backup} appeared during the update; it was left in place")
             if os.path.isfile(dst) and not os.path.islink(dst):
                 _file_backup(dst, backup, tag)
                 swapped.append((dst, backup))
@@ -427,16 +427,17 @@ def _graft_nested_artifacts(item: str, live: str, staging: str) -> None:
 def _stage_entries(extracted: str, entries: list[str], project_root: str,
                    on_created=None) -> list[tuple[str, str]]:
     """Phase 1 for every entry; on failure nothing is live yet, so drop partial staging copies so a retry
-    starts from the same free space. Each entry is recorded BEFORE its copy starts: a copy that fails
-    partway (an unreadable source file) leaves a partial staging tree that must be dropped too.
+    starts from the same free space. An entry is listed only once its staging copy is this run's: a copy
+    that fails partway drops its own partial tree (``_stage_replacement``), and a pathname this run never
+    created (a user's file there) is never ``_discard_staged``'s to delete (F78).
     ``on_created(index, staging)``: the journal's hook as each staging entry comes into existence."""
     staged: list[tuple[str, str]] = []
     try:
         for index, item in enumerate(entries):
             dst = os.path.join(project_root, item)
-            staged.append((f"{dst}.hermes-update-staging", dst))
-            _stage_replacement(os.path.join(extracted, item), dst,
-                               None if on_created is None else (lambda path, i=index: on_created(i, path)))
+            staged.append((_stage_replacement(
+                os.path.join(extracted, item), dst,
+                None if on_created is None else (lambda path, i=index: on_created(i, path))), dst))
             # The source ZIP carries only source; the built outputs (#70337/#87331 release/, then
             # dist/, apps/desktop/node_modules and web_dist — #90495) exist only in the LIVE tree. Graft
             # them into the staged copy BEFORE the swap so the commit preserves them atomically.
@@ -447,16 +448,12 @@ def _stage_entries(extracted: str, entries: list[str], project_root: str,
     return staged
 
 
-def _staging_left(root: Path, entries: list[str]) -> list[str]:
-    """The declared staging paths still on disk (a cleanup that could not finish)."""
-    return [item for item in entries if os.path.lexists(os.path.join(root, item + ".hermes-update-staging"))]
-
-
-def _drop_journal_if_clean(root: Path, entries: list[str]) -> None:
-    """The journal is the only record of the staging paths: it goes only once every one of them is gone."""
-    left = _staging_left(root, entries)
+def _drop_journal_if_clean(root: Path, entries: list[str], suffixes=(".hermes-update-staging",)) -> None:
+    """The journal is the only record of the swap's siblings (``<entry><suffix>``): it goes only once
+    every one of them is gone, else the next launch's recovery could not tell them from a user's file."""
+    left = [item for item in entries if any(os.path.lexists(os.path.join(root, item + x)) for x in suffixes)]
     if left:
-        print(f"  ⚠ Could not remove the staged copies of {', '.join(left)}; the next `hermes` launch "
+        print(f"  ⚠ Could not remove the update's own copies of {', '.join(left)}; the next `hermes` launch "
               "removes them.")
         return
     (root / ZIP_SWAP_JOURNAL).unlink(missing_ok=True)
@@ -521,15 +518,18 @@ def _journaled_stage_and_swap(extracted: str, entries: list[str], root: Path, ta
         _commit_staged_replacements(
             staged, on_committed=lambda: write_zip_swap_journal(root, "committed", journal_entries, gen), tag=gen)
         # Committed: the new tree is whole. A journal that cannot go now (AV/indexer holding it) says
-        # "committed", which the next launch's recovery settles by keeping the new tree.
+        # "committed", which the next launch's recovery settles by keeping the new tree. It stays, too,
+        # while a backup (or backup temp) the best-effort cleanup could not remove is still on disk:
+        # recovery's own terminal check, else that backup is orphaned and wedges the retry (Q1/F79).
         with suppress(OSError):
-            (root / ZIP_SWAP_JOURNAL).unlink(missing_ok=True)
+            _drop_journal_if_clean(root, entries, (".hermes-update-staging", ".hermes-update-old",
+                                                   f".hermes-update-old.{gen}.tmp"))
     return staged
 
 
 def _download_and_swap_zip(branch: str, zip_url: str, target_sha: str | None = None) -> Optional[str]:
     """Download the source ZIP for *branch* and two-phase swap it into the checkout; return the commit it
-    installed (``target_sha``, else the archive's own, else None).
+    installed: the archive's own, which must equal ``target_sha`` when one is pinned.
     ``sys.exit(1)`` on any failure; the install ends fully updated or fully rolled back.
     Two-phase: stage every entry (dirs AND top-level files) beside its target, then swap all in with
     same-filesystem renames, rolling back on failure — one-at-a-time replacement left a mixed, unbootable
@@ -543,11 +543,15 @@ def _download_and_swap_zip(branch: str, zip_url: str, target_sha: str | None = N
     try:
         zip_path = os.path.join(tmp_dir, f"hermes-agent-{branch}.zip")
         urlretrieve(zip_url, zip_path)
-        # An unpinned branch ZIP still names its commit; without it the restart debt is armed for ''
-        # and can never be proven discharged.
-        target_sha = target_sha or _archive_commit(zip_path)
         print("→ Extracting...")
         _extract_zip_safely(zip_path, tmp_dir)
+        # The installed identity comes from the downloaded bytes (``git archive``'s comment), pinned or
+        # not: without it the restart debt is armed for '' and can never be proven discharged (S4).
+        archived = _archive_commit(zip_path)
+        if archived is None or (target_sha and archived != target_sha):
+            raise ValueError(f"the archive names commit {archived or 'none'}, not "
+                             f"{target_sha or 'a full commit SHA'}; refusing to install unidentified bytes")
+        target_sha = archived
         extracted = _extracted_root(tmp_dir, branch)
         entries = [i for i in os.listdir(extracted) if i not in _ZIP_PRESERVED_TOP_LEVEL]
         project_root = str(_m().PROJECT_ROOT)

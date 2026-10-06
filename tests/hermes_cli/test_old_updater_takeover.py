@@ -136,7 +136,10 @@ def test_shipped_post_swap_argv_enters_takeover_before_current_cli(tmp_path):
 @pytest.mark.parametrize("status", [0, 7])
 @pytest.mark.parametrize("encoding", ["utf-8", "utf-8-sig"])
 @pytest.mark.parametrize("desktop", [None, False, True])
-def test_takeover_waits_propagates_status_and_never_reenters_old_code(tmp_path, status, encoding, desktop):
+# A Windows console/pipe in the ANSI code page: the old updater's stdout encodes strictly in cp1252,
+# and its hand-off banner runs before the child starts (review S1).
+@pytest.mark.parametrize("stdio", [None, "cp1252:strict"])
+def test_takeover_waits_propagates_status_and_never_reenters_old_code(tmp_path, status, encoding, desktop, stdio):
     source = Path(__file__).resolve().parents[2]
     root = tmp_path / "updated checkout"
     package = root / "hermes_cli"
@@ -184,8 +187,10 @@ def test_takeover_waits_propagates_status_and_never_reenters_old_code(tmp_path, 
     env = {key: value for key, value in os.environ.items()
            if not key.startswith(('HERMES_', 'PYTHON', 'UV_'))}
     env.update(HOME=str(home), HERMES_HOME=str(home), PYTHONPATH="/not/the/new/source")
+    if stdio:
+        env["PYTHONIOENCODING"] = stdio
     result = subprocess.run([sys.executable, "-B", str(program)], env=env,
-                            capture_output=True, text=True, timeout=30)
+                            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
     assert result.returncode == status, result.stdout + result.stderr
     assert (home / "runs").read_text() == "child\n"
     assert (home / "cleanup").read_text() == "ran"
@@ -530,8 +535,8 @@ def test_takeover_arms_the_host_record_without_application_dependencies(tmp_path
         stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding="utf-8", timeout=60,
     )
     assert child.returncode == 0, child.stdout + child.stderr
-    record = json.loads((lock_dir / "host-update-restart.json").read_text(encoding="utf-8-sig"))
-    assert record["expected_sha"] == head
+    [armed] = lock_dir.glob("host-update-restart-*.json")  # the install-keyed record (review S3)
+    assert json.loads(armed.read_text(encoding="utf-8-sig"))["expected_sha"] == head
 
 
 def test_a_finish_child_that_cannot_start_after_the_commit_is_owed_not_failed(tmp_path, monkeypatch, capsys):

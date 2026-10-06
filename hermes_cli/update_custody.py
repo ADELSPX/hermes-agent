@@ -8,7 +8,7 @@ can still write the checkout, and must NOT leak into processes that outlive the 
   forks a detached gc/maintenance child that would inherit (POSIX) or outlive (Windows) the lock.
 * POSIX: the lock fd is inherited ONLY by git commands that mutate the worktree, index or refs
   locally (:data:`LOCAL_MUTATORS`, run with ``core.fsmonitor=false`` so no fsmonitor daemon
-  starts under them, and with no credential helper). Network/credential commands (fetch,
+  starts under them, with no credential helper and no repository hooks). Network/credential commands (fetch,
   ls-remote, credential) and readers run without it: a ``git credential-cache--daemon`` they
   start never holds the checkout. A partial clone's mutator would lazily fetch the objects a move
   needs as a child holding the fd (and start the daemon under it), so before a move the objects
@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import os
 import subprocess
 import sys
 from collections.abc import Sequence
@@ -52,8 +53,11 @@ logger = logging.getLogger(__name__)
 GIT_NO_DETACH = ("-c", "gc.autoDetach=false", "-c", "maintenance.auto=false")
 # Local mutators only (they hold the lock fd): never start an fsmonitor daemon under it, and no
 # credential helper — a promisor lazy fetch under a mutator would start `git
-# credential-cache--daemon` holding the fd for its lifetime (900 s by default, m3).
-_MUTATOR_CONFIG = ("-c", "core.fsmonitor=false", "-c", "credential.helper=")
+# credential-cache--daemon` holding the fd for its lifetime (900 s by default, m3). No repository
+# hooks either (F1): a hook inherits the fd, and one that backgrounds a process (a post-merge
+# daemon) kept a completed update's checkout locked until it exited. Per command only: the
+# repository's own hook configuration is untouched.
+_MUTATOR_CONFIG = ("-c", "core.fsmonitor=false", "-c", "credential.helper=", "-c", f"core.hooksPath={os.devnull}")
 
 # git subcommands that write the worktree, the index or refs on THIS machine. Only these inherit
 # the checkout lock fd: if the updater dies mid-command, the checkout stays locked until git exits.
@@ -527,13 +531,17 @@ _JOIN_JOB = (
     "limits.basic.flags = 0x2000\n"
     "if not tree or not k.SetInformationJobObject(tree, 9, ctypes.byref(limits), ctypes.sizeof(limits)):\n"
     "    refuse('could not create the job for the command tree: %d' % ctypes.get_last_error())\n"
-    # Verify, never assume the topology: a redirecting interpreter (a Store Python alias) can
-    # join while what it starts lands outside the job. Start the command suspended and run it
-    # only once Windows says it is in the job (F54).
+    # Verify, never assume the topology: a packaged interpreter (Store Python) joins, but starts a
+    # program outside its package with desktop-app breakaway, so the command leaves every job
+    # that permits breakaway, as the update job does (restarted gateways break away). Start the
+    # command suspended; if Windows says it is outside the job, put it in explicitly (F80), and
+    # run it only once it is in (F54): a command the job will not take is refused, never run.
     "k.IsProcessInJob.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.POINTER(ctypes.c_int)]\n"
     "p = subprocess.Popen(sys.argv[3:], stdin=subprocess.DEVNULL, creationflags=0x4)\n"
-    "inside = ctypes.c_int(0)\n"
-    "if not k.IsProcessInJob(ctypes.c_void_p(int(p._handle)), h, ctypes.byref(inside)) or not inside.value:\n"
+    "def in_job():\n"
+    "    inside = ctypes.c_int(0)\n"
+    "    return k.IsProcessInJob(ctypes.c_void_p(int(p._handle)), h, ctypes.byref(inside)) and inside.value\n"
+    "if not in_job() and not (k.AssignProcessToJobObject(h, ctypes.c_void_p(int(p._handle))) and in_job()):\n"
     "    p.kill()\n"
     "    p.wait()\n"
     "    refuse('the command would start outside the update job')\n"
@@ -606,8 +614,12 @@ def _join_launcher_python() -> str:
 # so nothing node starts (npm, esbuild, sh) keeps the checkout locked: custody of them rests on
 # this stdlib parent, which holds the fd until no descendant of the command is left.
 # * The command stays in the CALLER's process group: every group kill that stops a build (a
-#   Ctrl-C'd completion child's ``killpg``, Desktop's ``kill(-pid)``) reaches this launcher,
-#   node and everything under it that did not start a session of its own.
+#   Ctrl-C'd completion child's ``killpg``, Desktop's ``kill(-pid)``) reaches node and everything
+#   under it that did not start a session of its own. This launcher leaves that group (E): a
+#   SIGKILL of the group would otherwise kill the custodian too, and a descendant in a session of
+#   its own would go on writing with the checkout lock free. It outlives the kill, settles the
+#   tree as below, and only then exits (releasing the fd). A launcher started as its group's
+#   leader (a caller that gave it a session) cannot leave it; that group is then its own.
 # * Linux: the launcher is a child subreaper, so a descendant orphaned by node's exit (or by any
 #   intermediate's) is re-parented to it, never to init. Once node exits it SIGKILLs and reaps
 #   its children until none is left; it only signals its own unreaped children, so no pid it
@@ -681,7 +693,10 @@ def kill(pids):
         except OSError:
             pass
 
-p = subprocess.Popen(sys.argv[2:], pass_fds=fds)
+caller = os.getpgrp()
+if caller != me:
+    os.setpgid(0, 0)
+p = subprocess.Popen(sys.argv[2:], pass_fds=fds, process_group=caller)
 got = []
 
 def forward(signum, frame):
