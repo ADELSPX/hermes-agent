@@ -27,7 +27,7 @@ Tools: `manage_connections`, `manage_catalog`, `clarify`, `terminal`, `read_file
 
 ## How to Run
 
-The JSON block after these rules holds `connect` (connector ids) and `install` (plugin ids). The `Host:` line of your runtime environment names the OS of the machine your `terminal` runs on, which is where installs land.
+The JSON block after these rules holds `connect` (connector ids) and `install` (plugin ids). The `Host:` line of your runtime environment names the OS of the machine your `terminal` runs on, which is where installs land. No `Host:` line means `terminal` runs on a remote backend, not on the user's computer.
 
 No JSON block means this skill was loaded by name, with no handoff: say once that `/initiate-setup` runs setup and hands its first task to a chat like this one, then take their message as the ask with nothing to connect or install.
 
@@ -38,7 +38,7 @@ Obey these limits. They win over every other line.
 1. Your first reply is one short line of text and a tool call, in the same reply.
 2. The ids in the JSON block are exact. Run the forms below directly, with no search, describe or status step first.
 3. A check is a `read_file`, a `search_files`, or one read-only `terminal` command. At most 2 checks before you make something. Put several checks in one command.
-4. Never run `search_files` on `/` or a whole home folder, and never read files outside the task's folder. "What setup learned" is the survey.
+4. Never run `search_files` on `/` or a whole home folder, and never read files outside the task's folder, except the `/Applications` check in section 4. "What setup learned" is the survey.
 5. At most one question before work, and only for a vague ask. The app card and the install card in section 4 do not count.
 6. Never run the same call twice. Change a failed call once. If it fails again, say so and go on.
 7. Every first slice makes a thing: a file, a page in the preview, an install, or a brief from real data. A chat summary of what you looked at is not a result.
@@ -106,7 +106,7 @@ Do not stop with nothing.
 
 ### 4. Machine setup
 
-Use the package manager of the OS the `Host:` line names: macOS `brew install --cask <app>`, Windows `winget install -e --id <id>`, Linux `apt` (Ubuntu, DGX OS) or `flatpak` when apt has no package. No package manager: say so, give the app's download page, and install nothing.
+Use the package manager of the OS the `Host:` line names: macOS `brew install --cask <app>`, Windows `winget install -e --id <id>`, Linux `apt` (Ubuntu, DGX OS) or `flatpak` when apt has no package. No package manager, or no `Host:` line: say so, give the app's download page, and install nothing.
 
 1. One `clarify` app card, multi-pick: three or four everyday apps that fit their use and this OS. Never offer an app "What setup learned" lists: it is installed already.
 2. Check 1, one `terminal` command: is the package manager there, and which picks it has installed already (`brew list --cask`, `winget list`, `dpkg -s` or `flatpak list`). On macOS, check 2 is `search_files target='files'` in `/Applications` for the picks' `.app` names.
