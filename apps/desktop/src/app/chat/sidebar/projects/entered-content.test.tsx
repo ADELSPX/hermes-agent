@@ -6,6 +6,7 @@ import * as notifications from '@/store/notifications'
 import * as projectStore from '@/store/projects'
 
 import { EnteredMainSessionButton, EnteredProjectContent } from './entered-content'
+import type * as SidebarModel from './model'
 import type { SidebarProjectTree, SidebarSessionGroup } from './workspace-groups'
 
 const switchBranchInRepoMock = vi.spyOn(projectStore, 'switchBranchInRepo')
@@ -42,7 +43,7 @@ vi.mock('@/i18n', () => ({
 // bounded-reveal assertions exercise production behavior; only the
 // layout-store-backed open-state hook is stubbed.
 vi.mock('./model', async importOriginal => ({
-  ...(await importOriginal<typeof import('./model')>()),
+  ...(await importOriginal<typeof SidebarModel>()),
   useWorkspaceNodeOpen: () => [true, vi.fn()]
 }))
 
