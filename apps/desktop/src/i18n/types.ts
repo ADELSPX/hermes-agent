@@ -9,6 +9,7 @@ import type { ErrorCodeKey } from '@/lib/error-surface'
 import type { TipId } from '@/lib/tips/catalog'
 
 import type { AuxTaskCopyMap } from './types_aux_tasks'
+import type { BillingTranslations } from './types_billing'
 import type { BootTranslations } from './types_boot'
 import type { ModelMenuTranslations } from './types_model_menu'
 import type { NoticeTranslations } from './types_notices'
@@ -535,14 +536,7 @@ export interface Translations extends NoticeTranslations {
     }
   }
 
-  billingBlock: {
-    titleNous: string
-    titleProvider: (provider: string) => string
-    fallbackMessage: string
-    openBilling: string
-    addCredits: string
-    dismiss: string
-  }
+  billingBlock: BillingTranslations['billingBlock']
 
   sendDiagnostics: {
     title: string
