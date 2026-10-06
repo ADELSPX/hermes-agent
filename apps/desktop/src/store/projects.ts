@@ -649,6 +649,7 @@ $activeGatewayProfile.subscribe(profile => {
   }
 
   projectsCacheOwnerProfile = key
+
   // A project id names a row in ONE profile's projects.db, so the entered
   // scope belongs to the departing profile's catalog — leave it with the cache.
   // In the All-profiles overview the catalog is DELIBERATELY cross-profile

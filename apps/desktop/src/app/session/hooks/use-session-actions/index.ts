@@ -166,6 +166,7 @@ import { sessionCreateOverrideParams, type SessionCreateOverrides, type SessionS
 import { markSessionCreatedThisRun, sessionCreatedThisRun } from './created-this-run'
 import { captureDisplayHydration } from './display-hydration'
 import { reconcilePersistedLiveTurn } from './persisted-live-turn'
+import { resolveChatProfile } from './profile-swap'
 import { provisionalTranscriptPaint, transcriptRestScope } from './provisional-transcript'
 import { rememberedOwnerForResume } from './remembered-owner'
 import { pendingClarifyToolPayload, restorePendingClarifyFromSnapshot } from './restore-pending-clarify'
@@ -364,16 +365,8 @@ async function desktopSessionCreateParams(
     provider: isManualSelection ? $currentProvider.get().trim() : ''
   }
 
-  // A pending gateway swap (#81817): ⌘N clears the per-profile quick-create
-  // selection while the switch is still opening its target backend — the
-  // visible intent is the pending target, not the still-live previous profile,
-  // or the new chat binds to (and inherits the cwd of) the profile the user
-  // just left.
-  const profile =
-    capturedRoute?.profile ||
-    requestedProfile ||
-    $newChatProfile.get() ||
-    normalizeProfileKey($gatewaySwapTarget.get() || $activeGatewayProfile.get())
+  // #81817: a pending swap's target wins over the still-live profile (profile-swap.ts).
+  const profile = resolveChatProfile(capturedRoute?.profile || requestedProfile || $newChatProfile.get())
 
   if (capturedRoute) {
     await ensureGatewayAgent(capturedRoute.connectionId, profile)
@@ -825,13 +818,8 @@ export function useSessionActions({
         // reduce the owner to a bare profile name that later RPCs dial on a
         // different socket than the one that minted the runtime.
         const capturedRoute = resolveNewChatOwnerRoute()
-        // A pending gateway swap (#81817): the draft's quick-create selection
-        // is cleared while the swap is still opening the TARGET profile's
-        // backend, so reading only the live atoms binds the new chat to (and
-        // inherits the cwd of) the profile the user just left. The pending
-        // swap target is the visible intent and wins the fallback.
-        const capturedProfile =
-          $newChatProfile.get() || normalizeProfileKey($gatewaySwapTarget.get() || $activeGatewayProfile.get())
+        // #81817: a pending swap's target wins over the still-live profile (profile-swap.ts).
+        const capturedProfile = resolveChatProfile($newChatProfile.get())
         const legacyProfileIntent = isLegacyNewChatProfile(capturedProfile)
 
         const params = {

@@ -1,10 +1,10 @@
 import { atom } from 'nanostores'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { $activeGatewayProfile, ALL_PROFILES, setShowAllProfiles } from '@/store/profile'
-import { applyConfiguredDefaultProjectDir, $currentCwd } from '@/store/session'
-import { deferred } from '@/test/deferred'
 import type { SidebarProjectTree } from '@/app/chat/sidebar/projects/workspace-groups'
+import { $activeGatewayProfile, setShowAllProfiles } from '@/store/profile'
+import { $currentCwd, applyConfiguredDefaultProjectDir } from '@/store/session'
+import { deferred } from '@/test/deferred'
 
 import { wipeSessionListsForGatewaySwitch } from './gateway-switch'
 import { $projectScope, ALL_PROJECTS } from './project-scope'
