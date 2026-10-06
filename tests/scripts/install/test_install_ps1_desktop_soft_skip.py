@@ -26,7 +26,7 @@ import pytest
 
 pytestmark = pytest.mark.platforms("windows")
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 INSTALL_PS1 = REPO_ROOT / "scripts" / "install.ps1"
 
 # The forced failure must carry text the skip reason can quote, so the
