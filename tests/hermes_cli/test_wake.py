@@ -1,8 +1,8 @@
 """One-shot session self-wake: an armed wake deadline re-enters the loop with no user input (#122444).
 
-The orchestrator turn arms a wake via ``schedule_wake``; the classic-TUI idle hook fires it
-into ``_pending_input`` exactly once, so the next process-loop dequeue is a chat turn and the
-chain never dies waiting for a human.
+The orchestrator turn arms a wake via ``schedule_wake``; the owning driver (classic-CLI idle hook,
+TUI/Desktop session-owner poller, messaging-gateway watcher) fires it exactly once, so the next
+turn is a chat turn and the chain never dies waiting for a human.
 """
 
 import json
@@ -34,38 +34,54 @@ class _Cli(CLILoopsMixin):
         self.session_id = session_id
 
 
-def test_due_wake_deadline_queues_prompt_without_user_input(hermes_home):
-    """A due wake fires exactly once into ``_pending_input`` — the loop's next dequeue is a
-    chat turn with no user input in between (the broken chain reported in #122444)."""
-    from hermes_cli.wake import schedule_wake
+def test_due_wake_fires_once_as_a_chat_turn_even_when_the_prompt_looks_like_a_command(hermes_home):
+    """A due wake fires exactly once into ``_pending_input`` and the injected text is the rendered
+    ``[Wake …]`` message, never the raw prompt: a model-authored ``/exit`` or ``!rm`` can't reach
+    the CLI's slash/bang router (the reviewer's blocker on the first cut). Gateway-routed wakes are
+    skipped by the CLI driver — they belong to the gateway watcher."""
+    from hermes_cli.wake import load_wake, schedule_wake
 
-    schedule_wake("wake-sid", "check the fleet and re-arm", time.time() - 1)
+    schedule_wake("wake-sid", "/exit", time.time() - 1)
     cli = _Cli("wake-sid")
 
     cli._maybe_fire_wake()
-    assert not cli._pending_input.empty()
-    assert "check the fleet" in cli._pending_input.get()
+    injected = cli._pending_input.get_nowait()
+    assert injected.startswith("[Wake") and "/exit" in injected and not injected.startswith("/")
+    assert load_wake("wake-sid").fire_count == 1 and not load_wake("wake-sid").armed
 
-    # One-shot: the wake is consumed on fire and never re-fires.
     cli._last_wake_check = 0.0
     cli._maybe_fire_wake()
-    assert cli._pending_input.empty()
+    assert cli._pending_input.empty()  # one-shot: consumed on fire
+
+    schedule_wake("wake-sid", "routed", time.time() - 1, route={"platform": "telegram", "chat_id": "42"})
+    cli._last_wake_check = 0.0
+    cli._maybe_fire_wake()
+    assert cli._pending_input.empty() and load_wake("wake-sid").armed
 
 
-def test_not_yet_due_wake_stays_armed_and_the_tool_arms_it(hermes_home):
-    """``schedule_wake`` (the orchestrator-facing tool) persists the deadline for the current
-    session; before ``fires_at`` the idle hook stays silent."""
+def test_tool_arms_with_budget_and_refund_keeps_an_unstarted_fire_armed(hermes_home, monkeypatch):
+    """``schedule_wake`` persists the deadline (not due before ``fires_at``); the per-session fire
+    budget refuses the (N+1)th arm instead of letting a self-re-arming model loop forever; a driver
+    whose dispatch never started a turn rewinds the fire so the wake stays armed."""
+    from hermes_cli import wake
     from tools.schedule_wake_tool import schedule_wake_tool
 
-    out = schedule_wake_tool(
-        {"prompt": "resume the migration gate", "delay_secs": 60}, session_id="wake-tool-sid"
-    )
+    out = schedule_wake_tool({"prompt": "resume the migration gate", "delay_secs": 60}, session_id="s")
     assert json.loads(out)["success"] is True
+    state = wake.load_wake("s")
+    assert state.prompt == "resume the migration gate" and state.fires_at > time.time()
+    assert wake.due_wake_prompt("s") is None and wake.load_wake("s").armed  # not due yet → stays armed
 
-    from hermes_cli.wake import due_wake_prompt, load_wake
+    monkeypatch.setattr(wake, "max_fires", lambda: 2)
+    for _ in range(2):
+        wake.schedule_wake("s", "again", time.time() - 1)
+        assert wake.due_wake_prompt("s")
+    refused = json.loads(schedule_wake_tool({"prompt": "again", "delay_secs": 60}, session_id="s"))
+    assert "budget" in refused["error"] and not wake.load_wake("s").armed
 
-    state = load_wake("wake-tool-sid")
-    assert state is not None
-    assert state.prompt == "resume the migration gate"
-    assert state.fires_at > time.time()
-    assert due_wake_prompt("wake-tool-sid") is None  # not due yet → stays armed
+    monkeypatch.setattr(wake, "max_fires", lambda: 0)
+    wake.schedule_wake("s", "refund me", time.time() - 1)
+    assert wake.due_wake_prompt("s") and not wake.load_wake("s").armed
+    assert wake.abandon_wake_fire("s") is True
+    assert wake.load_wake("s").armed and wake.load_wake("s").fire_count == 2
+    assert wake.abandon_wake_fire("s") is False  # nothing to refund once armed again

@@ -1,19 +1,22 @@
 """schedule_wake - arm a one-shot self-wake deadline for this session (#122444).
 
-The orchestrator's own alarm: at ``fires_at`` the CLI idle hook injects ``prompt`` as a
-plain user turn, so a long delegation/gating session re-enters its loop without human
-polling. One-shot only (recurring wake-ups are ``/heartbeat``'s job), refused for
-subagent sessions (their session has no idle loop to fire a wake), and only exposed
-where a live ``_tui_process_loop`` will actually fire it - a wake armed anywhere else
-would be armed-but-dead, the exact failure class #122444 reports.
+Inspired by ChatGPT Work's dots, which "decide when to pause and wake up to continue work"
+instead of needing a fixed schedule for every follow-up. The orchestrator's own alarm: at
+``fires_at`` the session's owning driver (classic-CLI idle hook, TUI/Desktop session-owner
+poller, or the messaging gateway's wake watcher for a wake armed inside a chat) injects
+``prompt`` as a plain user turn, so a long delegation/gating session re-enters its loop
+without human polling. One-shot only (recurring wake-ups are ``/heartbeat``'s job); refused
+for subagent sessions (a child's session has no idle loop of its own) and hidden from
+surfaces that cannot fire it (cron and one-shot ``-q`` runs end with the turn, the API server
+hands the next turn to the client) - a wake armed there would be armed-but-dead, the exact
+failure class #122444 reports.
 """
 
 import json
 import os
-import threading
 import time
 from datetime import datetime
-from typing import Optional
+from typing import Dict, Optional
 
 from tools.registry import registry, tool_error
 
@@ -21,21 +24,27 @@ from tools.registry import registry, tool_error
 # not a wake. The issue's alarm ladders sleep ~15 min; nothing legitimate is faster.
 MIN_WAKE_DELAY_SECONDS = 60
 
-
-def _has_live_turn_loop() -> bool:
-    """True when this process runs the classic-TUI ``_tui_process_loop`` that drains
-    ``_pending_input`` (and therefore fires armed wakes). Gateway sessions, the desktop
-    session-owner, ACP, cron and -q runs never start it: a wake armed there would sit
-    unfired (armed-but-dead)."""
-    for thread in threading.enumerate():
-        target = getattr(thread, "_target", None)
-        if getattr(target, "__name__", "") == "_tui_process_loop":
-            return True
-    return False
+# Platforms whose turns nobody re-enters after they end: a wake armed there never fires.
+_NO_WAKE_DRIVER_PLATFORMS = frozenset({"api_server", "kanban", "webhook", "msgraph_webhook"})
 
 
 def check_schedule_wake_requirements() -> bool:
-    return _has_live_turn_loop()
+    """Offer the tool only where a driver will fire the wake: not in cron runs (the session
+    ends with the job), not in Kanban workers / one-shot API turns (the client owns the next
+    turn, see ``async_delivery_supported``), and not under a stateless channel."""
+    if os.environ.get("HERMES_KANBAN_TASK"):
+        return False
+    try:
+        from gateway.session_context import async_delivery_supported, get_session_env
+
+        if not async_delivery_supported():
+            return False
+        if get_session_env("HERMES_CRON_SESSION", ""):
+            return False
+        platform = str(get_session_env("HERMES_SESSION_PLATFORM", "") or "").strip().lower()
+        return platform not in _NO_WAKE_DRIVER_PLATFORMS
+    except Exception:
+        return True
 
 
 def _resolve_fires_at(args: dict) -> float:
@@ -51,6 +60,29 @@ def _resolve_fires_at(args: dict) -> float:
     if fires_at < time.time():
         raise ValueError("at_iso is in the past")
     return fires_at
+
+
+def _gateway_route() -> Dict[str, str]:
+    """The messaging chat this turn runs in (empty for CLI/TUI/Desktop), captured at arm time so
+    the gateway's wake watcher can re-enter the same chat after a restart - same shape as the
+    ``/loop`` route (``gateway/slash_commands_goals.py``)."""
+    try:
+        from gateway.session_context import get_session_env, session_is_messaging_surface
+
+        if not session_is_messaging_surface():
+            return {}
+        route = {
+            "platform": get_session_env("HERMES_SESSION_PLATFORM", ""),
+            "chat_id": get_session_env("HERMES_SESSION_CHAT_ID", ""),
+            "chat_type": get_session_env("HERMES_SESSION_CHAT_TYPE", ""),
+            "thread_id": get_session_env("HERMES_SESSION_THREAD_ID", ""),
+            "user_id": get_session_env("HERMES_SESSION_USER_ID", ""),
+            "user_name": get_session_env("HERMES_SESSION_USER_NAME", ""),
+            "profile": get_session_env("HERMES_SESSION_PROFILE", ""),
+        }
+        return {k: str(v) for k, v in route.items() if v}
+    except Exception:
+        return {}
 
 
 def schedule_wake_tool(args: dict, session_id: Optional[str] = None) -> str:
@@ -81,14 +113,17 @@ def schedule_wake_tool(args: dict, session_id: Optional[str] = None) -> str:
     sid = session_id or os.environ.get("HERMES_SESSION_ID", "")
     if not sid:
         return tool_error("schedule_wake: no session id in this context; run from a session.")
-    try:
-        from hermes_cli.wake import schedule_wake
+    from hermes_cli.wake import WakeBudgetExhausted, schedule_wake
 
-        schedule_wake(sid, prompt, fires_at)
+    try:
+        state = schedule_wake(sid, prompt, fires_at, route=_gateway_route())
+    except WakeBudgetExhausted as exc:
+        return tool_error(f"schedule_wake refused: {exc}")
     except Exception as exc:
         return tool_error(f"schedule_wake failed: {exc}")
     return json.dumps(
-        {"success": True, "session_id": sid, "fires_at": fires_at, "prompt": prompt},
+        {"success": True, "session_id": sid, "fires_at": fires_at, "prompt": prompt,
+         "fires_so_far": state.fire_count},
         ensure_ascii=False,
     )
 
@@ -98,11 +133,12 @@ SCHEDULE_WAKE_SCHEMA = {
     "description": (
         "Arm a ONE-SHOT self-wake for this session: at the deadline the prompt below is "
         "injected as a user message and the session's loop re-enters with no human input - "
-        "use it to keep a long orchestration (delegation batches, gated pipelines) alive "
-        "instead of sleeping forever when nothing else will wake you. Requires delay_secs "
-        "(seconds from now) or at_iso (ISO timestamp), both >= 60s out; exactly one wake per "
-        "session (latest wins); fires once and is consumed. For recurring wake-ups use "
-        "/heartbeat. One-shot only: recurring=false is implied."
+        "use it to keep a long orchestration (delegation batches, gated pipelines, waiting on "
+        "an external process) alive instead of sleeping forever when nothing else will wake you. "
+        "Requires delay_secs (seconds from now) or at_iso (ISO timestamp), both >= 60s out; "
+        "exactly one wake per session (latest wins); fires once and is consumed, so re-arm it "
+        "from the wake turn while work is still outstanding (a per-session fire budget caps "
+        "runaway re-arming). For recurring wake-ups use /heartbeat."
     ),
     "parameters": {
         "type": "object",

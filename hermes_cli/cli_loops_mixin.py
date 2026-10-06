@@ -647,7 +647,9 @@ class CLILoopsMixin:
     def _maybe_fire_wake(self) -> None:
         """Idle hook run from process_loop: fire an armed one-shot wake deadline (#122444)
         so the loop re-enters without user input. One-shot: consumed on fire. Throttled
-        like the loop tick - the idle poll runs at ~10 Hz and every check reads the DB."""
+        like the loop tick - the idle poll runs at ~10 Hz and every check reads the DB. A wake
+        armed inside a messaging chat (route carries platform+chat_id) belongs to the gateway's
+        wake watcher; this driver never consumes it."""
         now = time.time()
         if now - getattr(self, "_last_wake_check", 0.0) < 2.0:
             return
@@ -655,8 +657,12 @@ class CLILoopsMixin:
         try:
             if not self._pending_input.empty():
                 return
-            from hermes_cli.wake import due_wake_prompt
-            prompt = due_wake_prompt(getattr(self, "session_id", "") or "", now)
+            from hermes_cli.wake import due_wake_prompt, load_wake, route_is_gateway_chat
+            sid = getattr(self, "session_id", "") or ""
+            state = load_wake(sid)
+            if state is None or not state.is_due(now) or route_is_gateway_chat(state.route):
+                return
+            prompt = due_wake_prompt(sid, now)
             if prompt:
                 self._pending_input.put(prompt)
         except Exception as exc:

@@ -205,12 +205,13 @@ TOOLSETS = {
     "hermes-acp": _ts(
         "Editor integration (VS Code, Zed, JetBrains) — coding-focused tools without "
         "messaging, audio, or clarify UI",
-        [t for t in _CODING_TOOLS if t != "clarify"],
+        [t for t in _CODING_TOOLS if t not in ("clarify", "schedule_wake")],
     ),
     "hermes-api-server": _ts(
         "OpenAI-compatible API server — full agent tools accessible via HTTP (no "
-        "interactive UI tools like clarify or send_message)",
-        _core_without("text_to_speech", "clarify", "computer_use", kanban=False),
+        "interactive UI tools like clarify or send_message; no schedule_wake — the "
+        "client owns the next turn)",
+        _core_without("text_to_speech", "clarify", "computer_use", "schedule_wake", kanban=False),
     ),
     "hermes-cli": _bundle("Full interactive CLI toolset - all default tools plus cronjob management"),
 
