@@ -33,7 +33,7 @@ import { $pullRequestsByBranch, sessionPrKey } from '@/store/pull-requests'
 import { sessionPinId } from '@/store/session'
 import { $sessionDotStateById, hasLiveTurn, showsRunningArc } from '@/store/session-dot-state'
 import { $sessionListDensity } from '@/store/session-list-density'
-import { $openStoredSessionIds } from '@/store/session-states'
+import { $openStoredSessionIds, $workingSessionIds } from '@/store/session-states'
 import { sessionCostUsd } from '@/store/sidebar-archive'
 import { $todoProgressBySession } from '@/store/todos'
 
@@ -262,6 +262,16 @@ function SidebarSessionRowImpl({
   // whenever any session's status changes, but a row only repaints on its own.
   const dotState = useStoreSelector($sessionDotStateById, states => states[session.id] ?? 'idle')
   const liveTurn = hasLiveTurn(dotState)
+  // Live activity caption for FOREIGN sessions (DB-derived liveness): rows
+  // whose work streams through events own their own transcript, so the
+  // caption only paints when no event-owned runtime is driving this row.
+  // Selector on $workingSessionIds (the same set the dot ladder's event rung
+  // claims through), so a row repaints when its own membership flips.
+  const eventWorking = useStoreSelector($workingSessionIds, ids => ids.includes(session.id))
+  const activityCaption =
+    dotState === 'working' && !eventWorking && session.last_activity_description
+      ? session.last_activity_description
+      : null
 
   // Card header line: the workspace this belongs to — the project when it
   // resolves (same function the session color reads, so name and tint agree;
@@ -593,6 +603,16 @@ function SidebarSessionRowImpl({
                         {details.preview}
                       </span>
                     )}
+                    {activityCaption ? (
+                      <span
+                        className={cn(
+                          'mt-0.5 block truncate text-[0.625rem] text-(--ui-text-tertiary)',
+                          SIDEBAR_TRUNCATED_LEADING
+                        )}
+                      >
+                        {activityCaption}
+                      </span>
+                    ) : null}
                   </span>
                   <SessionRowSlot area={SESSION_ROW_AREAS.trailing} sessionId={sessionPinId(session)} />
                 </>
@@ -650,6 +670,16 @@ function SidebarSessionRowImpl({
                       )}
                     >
                       {session.preview}
+                    </span>
+                  ) : null}
+                  {activityCaption ? (
+                    <span
+                      className={cn(
+                        'min-w-0 truncate text-[0.625rem] text-(--ui-text-tertiary)',
+                        SIDEBAR_TRUNCATED_LEADING
+                      )}
+                    >
+                      {activityCaption}
                     </span>
                   ) : null}
                 </div>
