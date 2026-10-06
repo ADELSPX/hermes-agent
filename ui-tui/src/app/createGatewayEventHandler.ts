@@ -35,6 +35,7 @@ import type { GatewayEventHandlerContext, NoticeLevel } from './interfaces.js'
 import { getOverlayState, patchOverlayState, SENSITIVE_PROMPTS } from './overlayStore.js'
 import { flashGoodVibes, flashPet } from './petFlashStore.js'
 import { forgetServerRequest } from './serverRequestStore.js'
+import { isForeignSessionEvent } from './sessionEventFilter.js'
 import { reportStartupLatency } from './startupLatency.js'
 import { turnController } from './turnController.js'
 import { getTurnState } from './turnStore.js'
@@ -792,21 +793,9 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
   }
 
   return (ev: AnyGatewayEvent) => {
-    // During session switch/reset, `sid` is momentarily null. The old
-    // `sid &&` guard short-circuited to false, letting events from other live
-    // sessions bleed into the active view (#51058). When sid is null, drop ALL
-    // non-gateway session events instead.
-    //
-    // Also filter empty-string session_id: _emit() can set session_id to ""
-    // when callers omit it (session.set_cwd, config.set, session.title). These
-    // session-scoped events would bleed into whichever session is active.
     const sid = getUiState().sid
-    const hasSessionId = Object.prototype.hasOwnProperty.call(ev, 'session_id')
-    const evSid = ev.session_id
-    const GLOBAL_PREFIXES = ['gateway.', 'pet.', 'skin.', 'billing.']
-    const isGlobal = GLOBAL_PREFIXES.some(p => ev.type.startsWith(p))
 
-    if (hasSessionId && (!sid || !evSid || evSid !== sid) && !isGlobal) {
+    if (isForeignSessionEvent(ev, sid)) {
       return
     }
 
