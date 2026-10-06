@@ -69,12 +69,6 @@ import type { SessionCreateResponse, SessionInfo, SessionResumeResult, SessionRu
 import type { ClientSessionState } from '../../../types'
 
 import {
-  acknowledgedTranscriptBoundary,
-  conflictingTranscriptIdentity,
-  persistedTurnsEquivalent,
-  transcriptRowIds
-} from './pending-turn-identity'
-import {
   committedFoldsOfLocalTurn,
   committedTwinCoversLiveResponse,
   durableFoldCoversLiveResponse,
@@ -82,6 +76,12 @@ import {
   isStrictAnswerTextExtension,
   toolCallIdsOf
 } from './folded-turn-coverage'
+import {
+  acknowledgedTranscriptBoundary,
+  conflictingTranscriptIdentity,
+  persistedTurnsEquivalent,
+  transcriptRowIds
+} from './pending-turn-identity'
 
 // Re-exported for call sites that already import it from here; the definition
 // lives in the fold sibling to keep the dependency one-directional.
@@ -693,6 +693,78 @@ const settledReplyOverEmptyShell = (local: ChatMessage, authoritative: ChatMessa
 const withAuthoritativeTurnState = (local: ChatMessage, authoritative: ChatMessage): ChatMessage =>
   carryRowIdentity({ ...local, pending: authoritative.pending === true }, authoritative)
 
+/**
+ * Ordinal pairing missed, yet the authoritative transcript already carries
+ * this same reply under its committed id. Three-way same-turn check against
+ * SETTLED authoritative rows only (a live projection shell must not swallow
+ * the richer local row, see the traces-only replacement test):
+ *  1. identical answer text            -> authoritative already has it
+ *  2. authoritative extends local text -> authoritative is the settled
+ *     final version of the still-streaming local copy
+ *  3. local extends authoritative text -> local is further along; replace
+ *     the committed row with the richer body instead of appending
+ *
+ * Returns true when the local row retires (dropped or replaced) — the caller
+ * keeps the COMMITTED id (not the local stream id): the turn is already in
+ * the authoritative transcript, so the merged row must stay addressable as
+ * that durable row; a stream id would read as a live row again next
+ * reconcile and re-enter this same path.
+ */
+function retiredPendingReply(
+  message: ChatMessage,
+  candidates: ChatMessage[],
+  replacements: Map<string, ChatMessage>
+): boolean {
+  const nextText = textWithoutReferenceLines(chatMessageText(message))
+
+  const committedMatch = candidates.find(
+    candidate =>
+      candidate.role === 'assistant' &&
+      !isLiveTailRow(candidate) &&
+      (textWithoutReferenceLines(chatMessageText(candidate)) === nextText ||
+        isStrictAnswerTextExtension(textWithoutReferenceLines(chatMessageText(candidate)), nextText))
+  )
+
+  if (committedMatch) {
+    return true
+  }
+
+  const committedPrefix = candidates.find(
+    candidate =>
+      candidate.role === 'assistant' &&
+      !isLiveTailRow(candidate) &&
+      isStrictAnswerTextExtension(nextText, textWithoutReferenceLines(chatMessageText(candidate)))
+  )
+
+  if (committedPrefix) {
+    replacements.set(committedPrefix.id, {
+      ...withAuthoritativeTurnState(message, committedPrefix),
+      id: committedPrefix.id
+    })
+  }
+
+  return Boolean(committedPrefix)
+}
+
+/**
+ * Does the durable window already fold this live reply's turn — either as the
+ * fold-carry of a sealed segment (#119540, #118670), or as the committed twin
+ * arriving under a different id after a reconnect (#131500) — so the stale
+ * live copy must retire instead of appending beside its durable twin?
+ */
+function foldRetiresLiveReply(
+  candidates: ChatMessage[],
+  previousMessages: ChatMessage[],
+  index: number,
+  message: ChatMessage
+): boolean {
+  const folds = committedFoldsOfLocalTurn(candidates, previousMessages, index)
+
+  return (
+    durableFoldCoversLiveResponse(folds, message) || committedTwinCoversLiveResponse(folds, message)
+  )
+}
+
 export function preserveLocalPendingTurnMessages(
   nextMessages: ChatMessage[],
   previousMessages: ChatMessage[]
@@ -955,65 +1027,15 @@ export function preserveLocalPendingTurnMessages(
     // (`pending !== true`); a still-pending stream row that slips past
     // pairing falls through to `preserved.push` and renders the answer
     // twice — the reported A B C D E C D tail duplication.
-    //
-    // Three-way same-turn check against SETTLED authoritative rows only
-    // (a live projection shell must not swallow the richer local row, see
-    // the traces-only replacement test):
-    //  1. identical answer text            -> authoritative already has it
-    //  2. authoritative extends local text -> authoritative is the settled
-    //     final version of the still-streaming local copy
-    //  3. local extends authoritative text -> local is further along; replace
-    //     the committed row with the richer body instead of appending
     if (isPendingAssistant) {
-      const nextText = textWithoutReferenceLines(chatMessageText(message))
+      const retired = retiredPendingReply(message, candidates, replacements)
 
-      const committedMatch = candidates.find(
-        candidate =>
-          candidate.role === 'assistant' &&
-          !isLiveTailRow(candidate) &&
-          (textWithoutReferenceLines(chatMessageText(candidate)) === nextText ||
-            isStrictAnswerTextExtension(textWithoutReferenceLines(chatMessageText(candidate)), nextText))
-      )
-
-      if (committedMatch) {
-        continue
-      }
-
-      const committedPrefix = candidates.find(
-        candidate =>
-          candidate.role === 'assistant' &&
-          !isLiveTailRow(candidate) &&
-          isStrictAnswerTextExtension(nextText, textWithoutReferenceLines(chatMessageText(candidate)))
-      )
-
-      if (committedPrefix) {
-        // Keep the COMMITTED id (not the local stream id): the turn is
-        // already in the authoritative transcript, so the merged row must
-        // stay addressable as that durable row — a stream id would read as a
-        // live row again next reconcile and re-enter this same path.
-        replacements.set(committedPrefix.id, {
-          ...withAuthoritativeTurnState(message, committedPrefix),
-          id: committedPrefix.id
-        })
-
+      if (retired) {
         continue
       }
     }
 
-    if (
-      isPendingAssistant &&
-      durableFoldCoversLiveResponse(committedFoldsOfLocalTurn(candidates, previousMessages, index), message)
-    ) {
-      continue
-    }
-
-    // #131500: the durable refresh already carries this reply's committed twin
-    // under a different id — retire the stale live copy instead of rendering it
-    // beside the committed bubble.
-    if (
-      isPendingAssistant &&
-      committedTwinCoversLiveResponse(committedFoldsOfLocalTurn(candidates, previousMessages, index), message)
-    ) {
+    if (isPendingAssistant && foldRetiresLiveReply(candidates, previousMessages, index, message)) {
       continue
     }
 
