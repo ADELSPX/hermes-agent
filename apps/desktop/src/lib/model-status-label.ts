@@ -277,7 +277,10 @@ export function composerServiceTier(value: unknown): string {
  *  `fast`, and the bounded policies (auto/cold) stay themselves. The session's
  *  boolean `fast` (a window is open RIGHT NOW) is never the policy (#132275). */
 export function speedPolicyWord(serviceTier: string | undefined): 'auto' | 'cold' | 'fast' | 'normal' | 'ultrafast' {
-  return serviceTier === 'priority'
+  // 'fast' is what applySpeedPolicy/applyModelPreset stamp into the session
+  // store for an always-on fast pick; 'priority' is the wire word an older
+  // session.info or legacy preset still carries. Both are the policy `fast`.
+  return serviceTier === 'priority' || serviceTier === 'fast'
     ? 'fast'
     : serviceTier === 'ultrafast' || serviceTier === 'auto' || serviceTier === 'cold'
       ? serviceTier

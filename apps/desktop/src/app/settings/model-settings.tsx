@@ -114,6 +114,20 @@ const SPEED_TIER_ALIASES: ReadonlySet<string> = new Set([
   'fast', 'on', 'priority', 'ultrafast', 'auto', 'cold'
 ])
 
+/** The Settings select's value for a saved `agent.service_tier` word: a known
+ *  alias shows its canonical choice (legacy fast/priority reads as Fast), an
+ *  unknown word (flex, scale, …) shows VERBATIM until the user picks one — the
+ *  page never rewrites what it did not save (#132275). */
+function settingsSpeedValue(rawTier: string): SpeedTier {
+  if (!SPEED_TIER_ALIASES.has(rawTier)) {
+    return (rawTier || 'normal') as SpeedTier
+  }
+
+  const tier = composerServiceTier(rawTier)
+
+  return (tier === 'priority' ? 'fast' : tier || 'normal') as SpeedTier
+}
+
 // A provider row is "ready" to pick a model from when it reports models. The
 // backend now surfaces the full `hermes model` universe (every canonical
 // provider), so unconfigured providers come back with `authenticated:false`
@@ -626,16 +640,10 @@ export function ModelSettings({ onMainModelChanged, scopeProfile, subpage }: Mod
   const effortValue = rawEffort === 'false' || rawEffort === 'disabled' ? 'none' : rawEffort || DEFAULT_REASONING_EFFORT
 
   // One profile-default speed policy: Standard, Fast, Auto, Cold or Ultrafast.
-  // The select shows the EXACT saved word: composerServiceTier maps legacy
-  // aliases (fast/priority/on) to their canonical mode and passes auto/cold
-  // through, and an unknown word (flex, scale, …) renders verbatim instead of
-  // silently reading as Standard — the page never rewrites what it did not
-  // save (#132275). Ultrafast only shows as a choice on models that offer it.
-  const rawTier = String(getNested(config ?? {}, 'agent.service_tier') ?? '').trim().toLowerCase()
-  const tier = composerServiceTier(rawTier)
-  const speedValue = (tier === 'normal' && rawTier && !(rawTier in SPEED_TIER_ALIASES)
-    ? rawTier
-    : tier || 'normal') as SpeedTier
+  // The select shows the exact saved policy (see settingsSpeedValue), so a
+  // bounded auto/cold policy never reads as Standard (#132275). Ultrafast
+  // only shows as a choice on models that offer it.
+  const speedValue = settingsSpeedValue(String(getNested(config ?? {}, 'agent.service_tier') ?? '').trim().toLowerCase())
 
   // Persist a single agent.* default as a sparse patch (PUT /api/config
   // deep-merges onto disk). Never send the whole cached record: it is a
