@@ -900,49 +900,42 @@ class TestModelSwitchMarkerNotTitleable:
         )
 
 
-class TestDeriveTitleSkipsCodeFences:
-    """A message opening with a code fence must not be titled after the fence.
+class TestDeriveTitleReadsPastMarkdown:
+    """The instant title names the topic, never the markup around it.
 
-    Real regression: 12 sessions in production history were named ``` or
-    ```json, colliding repeatedly until the lineage deduper had appended
-    suffixes up to "```json #10". The fence delimiter carries no intent, so
-    derive_title looks past it for the first line of real prose.
+    Fence delimiters (12 production sessions were named ``` / ```json, colliding up to "#10"),
+    images (a session named after an image URL), headings, list and quote markers, links,
+    inline code and emphasis are syntax, not intent. Delimiters that are not markup (``a * b``,
+    ``snake_case``, ``*args``) must come through untouched.
     """
 
-    def test_fence_only_opener_titles_from_body(self):
+    @pytest.mark.parametrize("message, expected", [
+        ('```json\n{"a": 1}\n```', '{"a": 1}'),
+        ("~~~python\nprint(1)\n~~~", "print(1)"),
+        ("```\n```\nwhy is this failing?", "why is this failing?"),
+        ("Fix the login button\n```js\ncode\n```", "Fix the login button"),
+        ("```notafence but prose", "```notafence but prose"),  # only a line that is NOTHING but a delimiter is a fence
+        ("```\n```", None),
+        ("![screenshot](https://x.example/a.png)\nwhy does this crash?", "screenshot"),
+        ("![](https://img.example/a.png)", None),  # alt-less image: no topic, not a URL title
+        ("![](https://img.example/a.png)\nwhy does this crash?", "why does this crash?"),
+        ("# Plan for the refactor\nbody", "Plan for the refactor"),
+        ("> quoted thing\nmore", "quoted thing"),
+        ("- [ ] first item\n- second", "first item"),
+        ("1. install deps\n2. run it", "install deps"),
+        ("**urgent**: fix the `build` step in [CI](https://ci.example/run/1) please", "urgent: fix the build step in CI please"),
+        ("***really*** ~~old~~ __init__.py", "really old init.py"),
+    ])
+    def test_markup_is_stripped_from_the_derived_title(self, message, expected):
         from agent.title_generator import derive_title
 
-        assert derive_title('```json\n{"a": 1}\n```') == '{"a": 1}'
+        assert derive_title(message) == expected
 
-    def test_tilde_fence_is_skipped(self):
+    @pytest.mark.parametrize("message", [
+        "a * b = c and 2*3", "use *args and **kwargs", "snake_case_name and file_name.py",
+        "x = arr[0] and (y)", "#hashtag not heading", "see https://example.com/foo for details",
+    ])
+    def test_non_markup_delimiters_survive(self, message):
         from agent.title_generator import derive_title
 
-        assert derive_title("~~~python\nprint(1)\n~~~") == "print(1)"
-
-    def test_bare_fence_is_skipped(self):
-        from agent.title_generator import derive_title
-
-        assert derive_title("```\nplain block\n```") == "plain block"
-
-    def test_fence_then_prose_prefers_prose_over_fence(self):
-        from agent.title_generator import derive_title
-
-        assert derive_title("```\n```\nwhy is this failing?") == "why is this failing?"
-
-    def test_prose_first_is_unchanged(self):
-        from agent.title_generator import derive_title
-
-        assert derive_title("Fix the login button\n```js\ncode\n```") == (
-            "Fix the login button"
-        )
-
-    def test_fence_like_prose_is_not_treated_as_a_fence(self):
-        """Only a line that is *nothing but* a delimiter counts as a fence."""
-        from agent.title_generator import derive_title
-
-        assert derive_title("```notafence but prose") == "```notafence but prose"
-
-    def test_message_of_only_fences_yields_no_title(self):
-        from agent.title_generator import derive_title
-
-        assert derive_title("```\n```") is None
+        assert derive_title(message) == message
