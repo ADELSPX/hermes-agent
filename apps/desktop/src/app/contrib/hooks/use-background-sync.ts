@@ -690,6 +690,9 @@ const TYPING_BURST_QUIET_MS = 1_500
 export const TRANSCRIPT_RETURN_REFRESH_MIN_GAP_MS = 5_000
 
 interface LiveSessionStatusItem {
+  /** Row reported from state.db, not this serve's in-memory registry (cron
+   *  runs, CLI one-shots, other processes). No runtime exists for it here. */
+  foreign?: boolean
   id?: string
   last_active?: number
   session_key?: string
@@ -771,6 +774,16 @@ export function rehydrateLiveSessionStatuses(
     }
 
     const existing = $sessionStates.get()[runtimeSessionId]
+
+    // A foreign row (DB-derived, no in-memory runtime here) never publishes
+    // runtime state — the DB-fallback liveness path ($foreignLiveSessionIds)
+    // owns its dot, and creating a phantom runtime would make the row's dot
+    // source flap between the two rungs. A foreign row whose id HAS a real
+    // runtime in this renderer is event-owned from here: the snapshot must
+    // not clobber what the stream path wrote.
+    if (session.foreign) {
+      continue
+    }
 
     // The active-list response is an async snapshot. Stream events can start
     // or finish this turn after the request begins but before its response is
