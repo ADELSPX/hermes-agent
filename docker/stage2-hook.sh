@@ -654,7 +654,7 @@ fi
 # keeps the extras recorded for the next boot or install. Then collect the
 # generations nothing selects any more: no service holds a lease yet, and
 # collect_generations keeps anything younger than a day.
-s6-setuidgid hermes "$INSTALL_DIR/.venv/bin/python" -c '
+as_hermes "$INSTALL_DIR/.venv/bin/python" -c '
 from pathlib import Path
 from hermes_cli.runtime_state import collect_generations
 from pm.environments import install_state_dir

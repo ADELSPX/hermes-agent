@@ -7,9 +7,11 @@ has no capabilities, and ``s6-setuidgid hermes`` fails with
 permitted``. ``as_hermes`` exists for exactly this reason: it drops privileges
 only when running as root and runs the command directly otherwise.
 
-Two call sites used ``s6-setuidgid hermes`` directly, so on a non-root start
-the boot-time config migration was silently skipped (the hook prints a warning
-and continues), and configs stayed on the old schema after every image update.
+Three call sites used ``s6-setuidgid hermes`` directly (config migration, Nous
+session reseed, dependency-generation refresh), so on a non-root start each was
+silently skipped (the hook prints a warning and continues): configs stayed on
+the old schema and opt-in dependency generations were never re-resolved after
+an image update.
 
 The tests run the real hook blocks with stubbed ``id`` / ``s6-setuidgid`` /
 python on PATH, for both a root and a non-root start.
@@ -32,7 +34,7 @@ STAGE2_HOOK = REPO_ROOT / "docker" / "stage2-hook.sh"
 def stage2_text() -> str:
     if not STAGE2_HOOK.exists():
         pytest.skip("docker/stage2-hook.sh not present in this checkout")
-    return STAGE2_HOOK.read_text()
+    return STAGE2_HOOK.read_text(encoding="utf-8")
 
 
 def _as_hermes_definition(text: str) -> str:
@@ -48,7 +50,7 @@ def _block_around(text: str, marker: str) -> str:
 
 
 def _write_exe(path: Path, body: str) -> None:
-    path.write_text("#!/bin/sh\n" + body)
+    path.write_text("#!/bin/sh\n" + body, encoding="utf-8")
     path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
 
@@ -78,8 +80,8 @@ def _run_block(tmp_path: Path, stage2_text: str, marker: str, uid: int,
 
     home = tmp_path / "home"
     home.mkdir()
-    (home / "config.yaml").write_text("_config_version: 1\n")
-    (home / "auth.json").write_text("{}\n")
+    (home / "config.yaml").write_text("_config_version: 1\n", encoding="utf-8")
+    (home / "auth.json").write_text("{}\n", encoding="utf-8")
 
     script = (
         "set -eu\n"
@@ -94,35 +96,28 @@ def _run_block(tmp_path: Path, stage2_text: str, marker: str, uid: int,
     env.pop("HERMES_SKIP_CONFIG_MIGRATION", None)
     env.update(extra_env or {})
     proc = subprocess.run(["sh", "-c", script], capture_output=True, text=True, env=env, timeout=30)
-    return proc, calls.read_text() if calls.exists() else ""
+    return proc, calls.read_text(encoding="utf-8") if calls.exists() else ""
 
 
 MIGRATE = "scripts/docker_config_migrate.py"
 REBOOTSTRAP = "scripts/docker_rebootstrap_nous_session.py"
 
 
+@pytest.mark.parametrize("uid", [10000, 0], ids=["non-root-start", "root-start"])
 @pytest.mark.parametrize("marker, extra_env", [
     (MIGRATE, None),
     (REBOOTSTRAP, {"HERMES_AUTH_JSON_REBOOTSTRAP": "1"}),
 ])
-def test_runs_directly_when_started_non_root(tmp_path, stage2_text, marker, extra_env):
-    proc, calls = _run_block(tmp_path, stage2_text, marker, uid=10000, extra_env=extra_env)
+def test_block_runs_as_hermes_for_either_start_uid(tmp_path, stage2_text, marker, extra_env, uid):
+    """Non-root start: run directly (no setgroups). Root start: still drop via s6-setuidgid."""
+    proc, calls = _run_block(tmp_path, stage2_text, marker, uid=uid, extra_env=extra_env)
     assert proc.returncode == 0, proc.stderr
     assert "Warning" not in proc.stdout, proc.stdout + proc.stderr
     assert marker in calls
-    assert "s6-setuidgid" not in calls
-
-
-@pytest.mark.parametrize("marker, extra_env", [
-    (MIGRATE, None),
-    (REBOOTSTRAP, {"HERMES_AUTH_JSON_REBOOTSTRAP": "1"}),
-])
-def test_drops_to_hermes_when_started_as_root(tmp_path, stage2_text, marker, extra_env):
-    proc, calls = _run_block(tmp_path, stage2_text, marker, uid=0, extra_env=extra_env)
-    assert proc.returncode == 0, proc.stderr
-    assert "Warning" not in proc.stdout, proc.stdout + proc.stderr
-    assert calls.splitlines()[0] == "s6-setuidgid hermes"
-    assert marker in calls
+    if uid == 0:
+        assert calls.splitlines()[0] == "s6-setuidgid hermes"
+    else:
+        assert "s6-setuidgid" not in calls
 
 
 def test_no_direct_s6_setuidgid_hermes_outside_as_hermes(stage2_text):
