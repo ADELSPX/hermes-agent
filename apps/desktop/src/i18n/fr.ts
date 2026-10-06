@@ -2004,6 +2004,8 @@ export const frOverrides = {
       reasoningOff: 'Désactivé',
       speed: 'Vitesse',
       speedStandard: 'Standard',
+      speedAuto: 'Auto',
+      speedCold: 'Froid',
       defaultsFailed: "Échec de l'enregistrement des modèles par défaut",
       loadFailed: 'Impossible de charger les modèles',
       restartRequired:
@@ -4920,6 +4922,9 @@ export const frOverrides = {
       fast: 'Rapide',
       ultrafast: 'Ultrafast',
       useStandardSpeed: 'Utiliser la vitesse standard',
+      auto: 'Auto',
+      cold: 'Froid',
+      speedPolicy: 'Politique de vitesse',
       effort: 'Effort',
       minimal: 'Minimal',
       low: 'Faible',

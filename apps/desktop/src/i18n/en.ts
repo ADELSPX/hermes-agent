@@ -1672,6 +1672,8 @@ export const en: Translations = {
       reasoningOff: 'Off',
       speed: 'Speed',
       speedStandard: 'Standard',
+      speedAuto: 'Auto',
+      speedCold: 'Cold',
       defaultsFailed: 'Failed to save model defaults',
       loadFailed: 'Could not load models',
       restartRequired: 'This backend is running old code after an update. Restart it to load the new code.',
@@ -4500,6 +4502,8 @@ export const en: Translations = {
       fast: 'Fast',
       ultrafast: 'Ultrafast',
       useStandardSpeed: 'Use standard speed',
+      auto: 'Auto',
+      cold: 'Cold',
       effort: 'Effort',
       minimal: 'Minimal',
       low: 'Low',
@@ -4510,6 +4514,7 @@ export const en: Translations = {
       ultra: 'Ultra',
       sendsOnRoute: (level: string) => `sends ${level} on this route`,
       updateFailed: 'Model option update failed',
+      speedPolicy: 'Speed policy',
       fastFailed: 'Fast mode update failed'
     },
     gatewayMenu: {

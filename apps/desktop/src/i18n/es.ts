@@ -1994,6 +1994,8 @@ export const esOverrides = {
       reasoningOff: 'Desactivado',
       speed: 'Velocidad',
       speedStandard: 'Estándar',
+      speedAuto: 'Automática',
+      speedCold: 'Fría',
       defaultsFailed: 'No se pudieron guardar los valores predeterminados del modelo',
       loadFailed: 'No se pudieron cargar los modelos',
       restartRequired:
@@ -4900,6 +4902,9 @@ export const esOverrides = {
       fast: 'Rápido',
       ultrafast: 'Ultrafast',
       useStandardSpeed: 'Usar velocidad estándar',
+      auto: 'Automática',
+      cold: 'Fría',
+      speedPolicy: 'Política de velocidad',
       effort: 'Esfuerzo',
       minimal: 'Mínimo',
       low: 'Bajo',

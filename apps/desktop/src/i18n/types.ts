@@ -1404,6 +1404,8 @@ export interface Translations extends NoticeTranslations {
       reasoningOff: string
       speed: string
       speedStandard: string
+      speedAuto: string
+      speedCold: string
       defaultsFailed: string
       loadFailed: string
       restartRequired: string
@@ -3767,6 +3769,8 @@ export interface Translations extends NoticeTranslations {
       fast: string
       ultrafast: string
       useStandardSpeed: string
+      auto: string
+      cold: string
       effort: string
       minimal: string
       low: string
@@ -3778,6 +3782,7 @@ export interface Translations extends NoticeTranslations {
       /** The CLI's `/reasoning` clamp note, e.g. "sends Max on this route". */
       sendsOnRoute: (level: string) => string
       updateFailed: string
+      speedPolicy: string
       fastFailed: string
     }
     gatewayMenu: {

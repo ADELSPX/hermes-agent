@@ -92,7 +92,27 @@ export function ModelSettingsSkeleton({ subpage }: Pick<ModelSettingsProps, 'sub
   )
 }
 
-type SpeedTier = 'fast' | 'normal' | 'ultrafast'
+// The exact speed-policy modes the backend parses (`agent/fast_mode.py`).
+// 'auto'/'cold' are the bounded policies: a fast window per user turn / only a
+// cold session's first turn. An unknown saved word is NOT one of these — the
+// select shows it verbatim instead of silently rewriting it (#132275).
+type SpeedTier = 'auto' | 'cold' | 'fast' | 'normal' | 'ultrafast'
+
+const SPEED_TIER_LABEL: Record<SpeedTier, string> = {
+  auto: 'Auto',
+  cold: 'Cold',
+  fast: 'Fast',
+  normal: 'Standard',
+  ultrafast: 'Ultrafast'
+}
+
+// Words `composerServiceTier` already maps to a canonical mode (normal words
+// like `default`/`off` included): anything else saved on disk is an unknown
+// policy and must render VERBATIM, not as Standard (#132275).
+const SPEED_TIER_ALIASES: ReadonlySet<string> = new Set([
+  '', 'default', 'none', 'normal', 'off', 'standard',
+  'fast', 'on', 'priority', 'ultrafast', 'auto', 'cold'
+])
 
 // A provider row is "ready" to pick a model from when it reports models. The
 // backend now surfaces the full `hermes model` universe (every canonical
@@ -605,11 +625,17 @@ export function ModelSettings({ onMainModelChanged, scopeProfile, subpage }: Mod
 
   const effortValue = rawEffort === 'false' || rawEffort === 'disabled' ? 'none' : rawEffort || DEFAULT_REASONING_EFFORT
 
-  // One profile-default speed: Standard, Fast (Priority) or Ultrafast. Ultrafast
-  // only shows as a choice on models that offer it.
-  const tier = composerServiceTier(getNested(config ?? {}, 'agent.service_tier'))
-  const fastOn = tier === 'priority'
-  const speedValue: SpeedTier = fastOn ? 'fast' : tier === 'ultrafast' ? 'ultrafast' : 'normal'
+  // One profile-default speed policy: Standard, Fast, Auto, Cold or Ultrafast.
+  // The select shows the EXACT saved word: composerServiceTier maps legacy
+  // aliases (fast/priority/on) to their canonical mode and passes auto/cold
+  // through, and an unknown word (flex, scale, …) renders verbatim instead of
+  // silently reading as Standard — the page never rewrites what it did not
+  // save (#132275). Ultrafast only shows as a choice on models that offer it.
+  const rawTier = String(getNested(config ?? {}, 'agent.service_tier') ?? '').trim().toLowerCase()
+  const tier = composerServiceTier(rawTier)
+  const speedValue = (tier === 'normal' && rawTier && !(rawTier in SPEED_TIER_ALIASES)
+    ? rawTier
+    : tier || 'normal') as SpeedTier
 
   // Persist a single agent.* default as a sparse patch (PUT /api/config
   // deep-merges onto disk). Never send the whole cached record: it is a
@@ -1004,7 +1030,7 @@ export function ModelSettings({ onMainModelChanged, scopeProfile, subpage }: Mod
                   </Select>
                 </div>
               )}
-              {ultrafastSupported ? (
+              {fastSupported && (
                 <div className="flex items-center gap-2 text-xs">
                   <span className="shrink-0 whitespace-nowrap">{m.speed}</span>
                   <Select
@@ -1015,25 +1041,21 @@ export function ModelSettings({ onMainModelChanged, scopeProfile, subpage }: Mod
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
+                      {/* Every choice writes the exact word the backend parses
+                          (`agent/fast_mode.py`): Standard, Fast, Auto (fast window
+                          per user turn), Cold (only a cold session's first turn)
+                          and Ultrafast where the model offers it. An unknown
+                          saved word renders verbatim below until the user picks
+                          one of these — the page never rewrites it (#132275). */}
+                      {!SPEED_TIER_LABEL[speedValue] && <SelectItem value={speedValue}>{speedValue}</SelectItem>}
                       <SelectItem value="normal">{m.speedStandard}</SelectItem>
-                      {fastSupported && <SelectItem value="fast">{t.shell.modelOptions.fast}</SelectItem>}
-                      <SelectItem value="ultrafast">{t.shell.modelOptions.ultrafast}</SelectItem>
+                      <SelectItem value="fast">{t.shell.modelOptions.fast}</SelectItem>
+                      <SelectItem value="auto">{m.speedAuto}</SelectItem>
+                      <SelectItem value="cold">{m.speedCold}</SelectItem>
+                      {ultrafastSupported && <SelectItem value="ultrafast">{t.shell.modelOptions.ultrafast}</SelectItem>}
                     </SelectContent>
                   </Select>
                 </div>
-              ) : (
-                fastSupported && (
-                  <label className="flex items-center gap-2 text-xs">
-                    {t.shell.modelOptions.fast}
-                    <Switch
-                      checked={fastOn}
-                      onCheckedChange={checked =>
-                        void writeAgentDefault('agent.service_tier', checked ? 'fast' : 'normal')
-                      }
-                      size="xs"
-                    />
-                  </label>
-                )
               )}
             </div>
           )}

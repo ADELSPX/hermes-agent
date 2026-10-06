@@ -37,7 +37,7 @@ import { useI18n } from '@/i18n'
 import { triggerHaptic } from '@/lib/haptics'
 import { isSubmitEnter } from '@/lib/ime'
 import { catalogProviderMatches, modelOptionsQueryKey, requestModelOptions } from '@/lib/model-options'
-import { displayModelName, modelDisplayParts } from '@/lib/model-status-label'
+import { applySpeedPolicy, displayModelName, modelDisplayParts } from '@/lib/model-status-label'
 import { accountResetMs, formatReset, modelResetMs } from '@/lib/provider-limit'
 import { reasoningEffortLabel } from '@/lib/reasoning-effort'
 import { foldIncludes, normalize } from '@/lib/text'
@@ -426,15 +426,7 @@ export function ModelCatalogMenu({
     }
 
     const rememberedTier = preset.serviceTier ?? (preset.fast ? 'priority' : 'normal')
-
-    const tier =
-      rememberedTier === 'ultrafast'
-        ? caps?.ultrafast
-          ? 'ultrafast'
-          : 'normal'
-        : rememberedTier === 'priority' && caps?.fast
-          ? 'priority'
-          : 'normal'
+    const tier = applySpeedPolicy(rememberedTier, { fast: caps?.fast ?? false, ultrafast: caps?.ultrafast ?? false })
 
     controller.applyPreset(
       {
@@ -1043,11 +1035,18 @@ function ModelFamilyRow({
   // be the same chip on every row, so it shows only on the active model and
   // on a row whose remembered preset chose one.
   const settings = [
-    fastControl.kind !== 'none' && fastControl.on && !(fastControl.kind === 'param' && fastControl.canEnable === false)
-      ? effTier === 'ultrafast'
+    // Show the exact POLICY, not just "Fast": a bounded auto/cold tier is a
+    // saved policy even while its window is closed, and ultrafast outranks the
+    // generic fast word (#132275).
+    fastControl.kind === 'none'
+      ? null
+      : effTier === 'ultrafast'
         ? t.shell.modelOptions.ultrafast
-        : copy.fast
-      : null,
+        : effTier === 'auto' || effTier === 'cold'
+          ? t.shell.modelOptions[effTier]
+          : fastControl.on && !(fastControl.kind === 'param' && fastControl.canEnable === false)
+            ? copy.fast
+            : null,
     (caps?.reasoning ?? true) && (isCurrent ? !current.effortPending : Boolean(effEffort))
       ? reasoningEffortLabel(effEffort || defaultEffort, isCurrent ? current.effortWire : undefined)
       : null

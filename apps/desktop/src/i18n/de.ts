@@ -1998,6 +1998,8 @@ export const deOverrides = {
       reasoningOff: 'Aus',
       speed: 'Geschwindigkeit',
       speedStandard: 'Standard',
+      speedAuto: 'Automatisch',
+      speedCold: 'Kalt',
       defaultsFailed: 'Voreinstellungen des Modells konnten nicht gespeichert werden',
       loadFailed: 'Modelle konnten nicht geladen werden',
       restartRequired:
@@ -4906,6 +4908,9 @@ export const deOverrides = {
       fast: 'Schnell',
       ultrafast: 'Ultrafast',
       useStandardSpeed: 'Standardgeschwindigkeit verwenden',
+      auto: 'Automatisch',
+      cold: 'Kalt',
+      speedPolicy: 'Geschwindigkeitsrichtlinie',
       effort: 'Aufwand',
       minimal: 'Minimal',
       low: 'Niedrig',

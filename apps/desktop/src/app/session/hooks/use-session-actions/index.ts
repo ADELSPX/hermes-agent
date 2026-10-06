@@ -393,9 +393,14 @@ async function desktopSessionCreateParams(
             : {}),
           ...(selection.effort ? { reasoning_effort: selection.effort } : {}),
           fast: selection.fast,
-          // Only Ultrafast needs the tier: `fast` already pins Priority/normal, and a
-          // pre-Ultrafast backend rejects the field (createGatewaySession drops it).
-          ...(selection.serviceTier === 'ultrafast' ? { service_tier: 'ultrafast' } : {})
+          // The bounded policies (auto/cold) and Ultrafast need the exact tier:
+          // `fast` alone would pin Priority and destroy the policy
+          // (`create_overrides` parses these via parse_exact_service_tier).
+          // Priority rides as `fast` only: a pre-Ultrafast backend rejects the
+          // field (createGatewaySession drops it).
+          ...((selection.serviceTier === 'ultrafast' || selection.serviceTier === 'auto' || selection.serviceTier === 'cold')
+            ? { service_tier: selection.serviceTier }
+            : {})
         }
       : {})
   }
