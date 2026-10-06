@@ -599,6 +599,103 @@ def test_an_unreadable_retired_list_claims_nothing_and_forgets_nothing(tmp_path,
 
 
 
+# --- Review A: a carrier that cannot be read is unknown, never absent ---------------------------
+def _unreadable(path: Path, how: str) -> None:
+    if how == "malformed":
+        path.write_text("{trunc", encoding="utf-8")
+    else:
+        path.chmod(0)  # stands in for a Windows read refusal (sharing violation, AV scanner)
+
+
+@pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0, reason="root reads a mode-000 file")
+@pytest.mark.parametrize("how", ["refused", "malformed"])
+def test_an_unreadable_newer_carrier_never_lets_its_older_copy_execute(tmp_path, monkeypatch, how):
+    """Partial progress left the newer claim owing only beta beside an older alpha+beta copy of the
+    same obligation (its unlink was refused). That claim becoming unreadable must not resurrect alpha."""
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    src = pause_record.record_path()
+    pause_id = "d" * 32
+    pause_record.write({"pause_id": pause_id, "resume_needed": True, "profiles": {"alpha": 11, "beta": 12}},
+                       owner=pause_record.UNOWNED)
+    newer = src.with_name(f"{src.name}.999.deadbeef.claim")
+    pause_record._atomic_write(newer, {"install_root": str(REPO), "claimer": pause_record.UNOWNED, "rev": 1,
+                                       "token": {"pause_id": pause_id, "resume_needed": True, "profiles": {"beta": 12}}})
+
+    def owed() -> list[dict]:
+        try:
+            return [body["token"]["profiles"] for _src, body in pause_record.orphans()]
+        except OSError:  # unknown: recovery reports it and claims nothing
+            return []
+
+    assert owed() == [{"beta": 12}], "premise: the furthest-progressed copy executes"
+    _unreadable(newer, how)
+    try:
+        assert {"alpha": 11, "beta": 12} not in owed(), "completed alpha would be restarted again"
+        assert pause_record.claim(src) is None, "the older copy was claimed past an unreadable newer one"
+    finally:
+        newer.chmod(0o644)
+    assert src.exists() and newer.exists(), "a carrier was deleted while its state was unknown"
+
+
+@pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0, reason="root reads a mode-000 file")
+@pytest.mark.parametrize("how", ["refused", "malformed"])
+def test_an_unreadable_orphan_is_never_overwritten_by_a_new_pause(tmp_path, monkeypatch, how):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    src = pause_record.record_path()
+    pause_record.write({"pause_id": "e" * 32, "resume_needed": True, "profiles": {"alpha": 11}}, owner=pause_record.UNOWNED)
+    saved = src.read_bytes()
+    _unreadable(src, how)
+    try:
+        with pytest.raises(OSError):
+            pause_record.write({"pause_id": "f" * 32, "resume_needed": True, "profiles": {"beta": 12}},
+                               owner=pause_record.identity())
+    finally:
+        src.chmod(0o644)
+    if how == "refused":
+        assert src.read_bytes() == saved, "alpha's saved restart obligation was replaced"
+    else:
+        assert src.read_text(encoding="utf-8") == "{trunc", "an unknown record was replaced"
+    src.write_bytes(saved)  # readable control: the new pause folds the orphan in
+    token = {"pause_id": "f" * 32, "resume_needed": True, "profiles": {"beta": 12}}
+    pause_record.write(token, owner=pause_record.identity())
+    assert pause_record.read()["token"]["profiles"] == {"alpha": 11, "beta": 12}
+
+
+# --- Review B: an accepted stop stays owed for the whole drain -----------------------------------
+@pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0, reason="root writes a read-only directory")
+@pytest.mark.parametrize("consumed", [True, False])
+def test_an_accepted_stop_the_record_could_not_checkpoint_outlives_the_request_ttl(tmp_path, monkeypatch, consumed):
+    """Producer and consumer checkpoints both refused (a read-only record directory stands in for
+    a Windows replace refusal), the updater gone, the gateway (this process) still draining past the
+    request's TTL: recovery keeps it owed. A request nobody consumed still expires (control)."""
+    from datetime import datetime, timedelta, timezone
+
+    from gateway import status
+    root, home = tmp_path / "root", tmp_path / "root" / "profiles" / "p"
+    home.mkdir(parents=True)
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    pid = os.getpid()
+    marker = status._get_planned_stop_marker_path()
+    token = pause_record.record_pause({"resume_needed": True, "profiles": {"p": pid},
+                                       "identities": {str(pid): pause_record.identity(pid)["ct"]}}, None, [])
+    pause_record.mark_stop_requested(token, [pid], markers={pid: marker})
+    assert status.write_planned_stop_marker(pid)
+    root.chmod(0o555)
+    try:
+        pause_record.mark_stop_sent(token, pid)  # refused: best effort
+        if consumed:
+            assert status.consume_planned_stop_marker_for_self() is True
+    finally:
+        root.chmod(0o755)
+    saved = pause_record.read()["token"]
+    assert saved["stop_sent"] == [], "premise: no checkpoint landed"
+    body = json.loads(marker.read_text(encoding="utf-8"))
+    body["written_at"] = (datetime.now(timezone.utc) - timedelta(seconds=120)).isoformat()  # past the TTL
+    marker.write_text(json.dumps(body), encoding="utf-8")
+    owed = pause_record.drop_never_stopped(dict(saved))["profiles"]
+    assert owed == ({"p": pid} if consumed else {}), "a gateway draining an accepted stop lost its restart debt"
+
+
 # --- Review W3: record hygiene --------------------------------------------------------------------
 def test_a_refused_publish_leaves_no_temp_beside_the_record(tmp_path, monkeypatch):
     target = tmp_path / "records" / "record.json"
@@ -742,4 +839,57 @@ def test_an_unmoved_head_holds_gateways_only_for_paths_the_updates_move_could_wr
     _git(root, "merge", "-q", "--ff-only", "origin/HEAD")
     token = pause_record.stamp_tree({"resume_needed": True}, root)
     (root / "b.lock").write_text("rewritten by the dependency sync\n", encoding="utf-8")
+    assert pause_record.tree_is_whole(token, root) == (True, "")
+
+
+def _cloned_checkout(tmp_path: Path) -> tuple[Path, Path]:
+    origin, root = tmp_path / "origin", tmp_path / "checkout"
+    origin.mkdir()
+    _git(origin, "init", "-q")
+    for name in ("a.py", "b.py"):
+        (origin / name).write_text("v1\n", encoding="utf-8")
+    _git(origin, "add", ".")
+    _git(origin, "commit", "-qm", "X")
+    _git(tmp_path, "clone", "-q", str(origin), str(root))
+    (origin / "a.py").write_text("v2\n", encoding="utf-8")
+    _git(origin, "commit", "-qam", "B")  # the update's target changes a.py
+    return origin, root
+
+
+def test_a_later_fetch_never_certifies_bytes_an_earlier_recorded_move_left(tmp_path, monkeypatch):
+    """Review D: the move's target goes on the record before git writes; a later fetch whose refs
+    no longer touch a.py must not turn the gate from false to true on the same partial bytes."""
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "home"))
+    origin, root = _cloned_checkout(tmp_path)
+    token = pause_record.stamp_tree({"resume_needed": True, "profiles": {"default": 4242}}, root)
+    _git(root, "fetch", "-q", "origin")
+    pause_record.mark_move(token, _git(root, "rev-parse", "origin/HEAD"))
+    (root / "a.py").write_text("v2 half\n", encoding="utf-8")  # git wrote a.py, died before HEAD
+    assert not pause_record.tree_is_whole(token, root)[0], "premise: the torn path holds the set"
+
+    (origin / "a.py").write_text("v1\n", encoding="utf-8")
+    (origin / "b.py").write_text("v2\n", encoding="utf-8")
+    _git(origin, "commit", "-qam", "C")  # a.py back to X's bytes: no fetched ref touches it now
+    _git(root, "fetch", "-q", "origin")
+    saved = pause_record.read()["token"]
+    for judged in (token, saved):
+        whole, why = pause_record.tree_is_whole(judged, root)
+        assert not whole and "a.py" in why, "a later fetch certified the earlier move's partial bytes"
+
+
+def test_an_autostashed_edit_vouches_only_for_its_own_bytes(tmp_path, monkeypatch):
+    """Review D / F3: a.py was dirty at pause, the update stashed it and its move wrote a.py partly.
+    The pathname alone no longer admits the different bytes; the restored edit itself still passes."""
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "home"))
+    _origin, root = _cloned_checkout(tmp_path)
+    (root / "a.py").write_text("user edit\n", encoding="utf-8")
+    token = pause_record.stamp_tree({"resume_needed": True, "profiles": {"default": 4242}}, root)
+    _git(root, "stash", "-q")
+    _git(root, "fetch", "-q", "origin")
+    pause_record.mark_move(token, _git(root, "rev-parse", "origin/HEAD"))
+    (root / "a.py").write_text("v2 half\n", encoding="utf-8")
+    whole, why = pause_record.tree_is_whole(token, root)
+    assert not whole and "a.py" in why, "the dirty pathname admitted git's half-written bytes"
+    _git(root, "checkout", "-q", "--", "a.py")
+    _git(root, "stash", "pop", "-q")  # the user's own edit back, byte for byte
     assert pause_record.tree_is_whole(token, root) == (True, "")

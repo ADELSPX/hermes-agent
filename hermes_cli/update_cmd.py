@@ -28,6 +28,7 @@ from hermes_cli import update_receipt as _completion_receipt, update_cmd_config 
 from hermes_cli._old_updater import stop_for_relaunch
 from hermes_cli._early_recovery import git_operation_in_progress, interrupted_pull_marker, is_object_id
 from hermes_cli import update_cmd_commit as _commit
+from hermes_cli import update_pause_record as _pause_record
 from hermes_cli import update_cmd_check as _check
 
 # Re-exports: every split-module name stays reachable (and monkeypatchable) as update_cmd.<name>.
@@ -1095,6 +1096,8 @@ def _pull_updates(
             print(f"✗ {refused}.")
             sys.exit(1)
         try:
+            # The paused gateways' tree gate must know this move's target before git writes a file.
+            _pause_record.mark_move(_windows_gateway_resume, target_sha)
             # merge --ff-only the already-fetched commit instead of `git pull`, which would do a
             # SECOND network fetch. Every move names ``target_sha``, never the ref: a ref that moves
             # after the arm cannot land a commit the marker and the debt do not name (review O3).

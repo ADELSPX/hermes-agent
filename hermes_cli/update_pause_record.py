@@ -106,6 +106,10 @@ class RetiredUnknown(OSError):
     """The retired-id list exists but cannot be read: which obligations are complete is unknown."""
 
 
+class RecordUnknown(OSError):
+    """A saved pause or claim exists but cannot be read or parsed: what it still owes is unknown."""
+
+
 @contextmanager
 def _mutex(wait_s: float = _MUTEX_WAIT_S):
     """Exclusive kernel lock on the record directory's sidecar (A7). Re-entrant per thread; each
@@ -206,18 +210,51 @@ def stamp_tree(token: dict, root: Path | None = None) -> dict:
     pause_id = token.setdefault("pause_id", uuid.uuid4().hex)
     baselines = token.setdefault("baselines", [])
     if (root / ".git").exists() and not any(b.get("pause_id") == pause_id for b in baselines):
-        baselines.append({"pause_id": pause_id, "pre_sha": head_sha(root), "dirty_at_pause": tracked_changes(root)})
+        dirty = tracked_changes(root)
+        # The bytes, not just the names: an autostashed edit and git's half-written bytes share a path.
+        baselines.append({"pause_id": pause_id, "pre_sha": head_sha(root), "dirty_at_pause": dirty,
+                          "dirty_digests": {path: _digest(root / path) for path in dirty or []}})
     return token
+
+
+def _digest(path: Path) -> str | None:
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:  # deleted (or unreadable) at pause: it must read the same way to count as unchanged
+        return None
+
+
+def mark_move(token: dict | None, target: str) -> None:
+    """Persist, BEFORE git writes the tree, the commit this run's checkout move goes to, on this
+    pause's own baseline: an unmoved HEAD is later judged against what THAT move could write, never
+    against refs a later fetch replaced. Raises when it cannot be recorded: the move must not run."""
+    if not token or not token.get("pause_id") or not target:
+        return
+    for baseline in token.get("baselines") or []:
+        if baseline.get("pause_id") == token["pause_id"]:
+            baseline["move_targets"] = sorted({*baseline.get("move_targets", []), target})
+    write({**token, "resume_needed": True})
 
 
 _MAX_MOVE_TARGETS = 16
 
 
+def _paths_between(root: Path, targets) -> set[str] | None:
+    """Tracked paths that differ between HEAD and any of *targets* — all a fast-forward, reset or
+    merge toward them can write; ``None`` when git cannot say."""
+    paths: set[str] = set()
+    for target in sorted(targets):
+        diff = _git(root, "diff", "--name-only", "-z", "--no-renames", "HEAD", target, "--")
+        if diff is None or diff.returncode != 0:
+            return None
+        paths.update(filter(None, diff.stdout.split("\0")))
+    return paths
+
+
 def _paths_a_move_could_write(root: Path) -> set[str] | None:
-    """Tracked paths an update's checkout move could have written while HEAD stayed put: the ones
-    that differ between HEAD and a commit the checkout fetched (``FETCH_HEAD``) or tracks
-    (``refs/remotes``) — a fast-forward, reset or merge only writes those. ``None`` when git cannot
-    say or nothing was fetched (the move's target is then unknown)."""
+    """For a pause with no recorded move (:func:`mark_move`: none attempted, or a record from before
+    it was kept): the paths between HEAD and a commit the checkout fetched (``FETCH_HEAD``) or tracks
+    (``refs/remotes``). ``None`` when git cannot say or nothing was fetched (target unknown)."""
     where = _git(root, "rev-parse", "--git-path", "FETCH_HEAD")
     refs = _git(root, "for-each-ref", "--format=%(objectname)", "refs/remotes")
     if where is None or where.returncode != 0 or refs is None or refs.returncode != 0:
@@ -231,13 +268,16 @@ def _paths_a_move_could_write(root: Path) -> set[str] | None:
     targets = {line.split()[0] for line in fetched if line.split()} | set(refs.stdout.split())
     if not targets or len(targets) > _MAX_MOVE_TARGETS:
         return None
-    paths: set[str] = set()
-    for target in sorted(targets):
-        diff = _git(root, "diff", "--name-only", "-z", "--no-renames", "HEAD", target, "--")
-        if diff is None or diff.returncode != 0:
-            return None
-        paths.update(filter(None, diff.stdout.split("\0")))
-    return paths
+    return _paths_between(root, targets)
+
+
+def _seen_at_pause(root: Path, baseline: dict, path: str) -> bool:
+    """*path* is as the pause saw it: dirty then, with the same bytes now (a baseline from before
+    digests were kept has only the name)."""
+    if path not in (baseline.get("dirty_at_pause") or []):
+        return False
+    digests = baseline.get("dirty_digests")
+    return digests is None or digests.get(path) == _digest(root / path)
 
 
 def _half_written(root: Path, changes: list[str], at_head: list[dict]) -> list[str]:
@@ -245,13 +285,14 @@ def _half_written(root: Path, changes: list[str], at_head: list[dict]) -> list[s
     baseline that has any. A change the pause did not see counts only on a path the update's move
     could write: a build/sync step (or the user) rewriting any other tracked file is not git's
     doing, and holding the set for it would keep gateways stopped until someone cleans the file.
-    When the move's target is unknown every unseen change still counts."""
-    writable: set[str] | None = None
-    probed = False
+    The move is the one recorded before it ran, so a later fetch never narrows it; with none
+    recorded the fetched refs stand in, and when even those are unknown every unseen change counts."""
     for baseline in at_head:
-        unexpected = sorted(set(changes) - set(baseline.get("dirty_at_pause") or []))
-        if unexpected and not probed:
-            writable, probed = _paths_a_move_could_write(root), True
+        unexpected = sorted(path for path in changes if not _seen_at_pause(root, baseline, path))
+        if not unexpected:
+            continue
+        targets = baseline.get("move_targets")
+        writable = _paths_between(root, targets) if targets else _paths_a_move_could_write(root)
         torn = unexpected if writable is None else [path for path in unexpected if path in writable]
         if torn:
             return torn
@@ -326,12 +367,24 @@ def _atomic_write(path: Path, body: dict) -> None:
 
 
 def read(path: Path | None = None) -> dict | None:
+    """The saved body; ``None`` only when the file is absent. One that exists but cannot be read
+    (a Windows sharing violation, an AV scanner) or does not parse raises :class:`RecordUnknown`:
+    it may be the newest copy of an obligation (its partial progress) or the only one, so it never
+    lets an older copy execute nor a new pause replace it. Callers fail closed and retry later."""
     path = path or record_path()
     try:
-        body = json.loads(path.read_text(encoding="utf-8-sig"))
-    except (OSError, ValueError):
+        text = path.read_text(encoding="utf-8-sig")
+    except FileNotFoundError:
         return None
-    return body if isinstance(body, dict) and isinstance(body.get("token"), dict) else None
+    except OSError as exc:
+        raise RecordUnknown(f"cannot read the paused-gateway record {path}: {exc}") from exc
+    try:
+        body = json.loads(text)
+    except ValueError:
+        body = None
+    if not isinstance(body, dict) or not isinstance(body.get("token"), dict):
+        raise RecordUnknown(f"the paused-gateway record {path} is malformed; fix or remove it to resume")
+    return body
 
 
 UNOWNED = {"pid": 0, "ct": None}
@@ -395,6 +448,20 @@ def mark_stop_consumed(path: Path, marker: dict) -> None:
             continue
         token["stop_sent"] = sorted({*map(str, token.get("stop_sent") or []), pid})
         _atomic_write(src, body)  # Failure leaves the request intact for recovery.
+
+
+def _accepted_path(marker_path: Path) -> Path:
+    return marker_path.with_name(marker_path.name + ".accepted")
+
+
+def mark_stop_accepted(path: Path, marker: dict) -> None:
+    """The consumer's receipt when it cannot checkpoint into the record (busy mutex, refused
+    replace): this incarnation accepted the request and drains until it exits, however long past
+    the request's TTL. Written beside the marker, in the gateway's own home, never into the record."""
+    try:
+        _atomic_write(_accepted_path(path), dict(marker))
+    except OSError as exc:
+        print(f"  ⚠ Could not record the accepted stop request {path}: {exc}", file=sys.stderr)
 
 
 def discharge(token: dict, path: Path | None = None) -> None:
@@ -494,7 +561,7 @@ def _holder(src: Path, body: dict) -> dict:
 
 
 def _files(path: Path) -> list[tuple[Path, dict]]:
-    """This checkout's record and claims, readable ones only."""
+    """This checkout's record and claims; one that cannot be read raises :class:`RecordUnknown`."""
     found = []
     for src in (path, *_claims(path)):
         body = read(src)
@@ -568,12 +635,10 @@ def retire_redundant(path: Path | None = None) -> None:
 
 
 def _prune_retired(path: Path) -> None:
-    """Forget retired ids no file carries any more — only when every candidate file was readable
-    (one Windows would not let us read may still carry a retired id)."""
+    """Forget retired ids no file carries any more (a carrier that cannot be read raises first)."""
     retired = _retired(path)
-    candidates = [p for p in (path, *_claims(path)) if p.exists()]
-    bodies = [read(p) for p in candidates]
-    if not retired or None in bodies:
+    bodies = [body for body in map(read, (path, *_claims(path))) if body is not None]
+    if not retired:
         return
     carried = {str(b["token"].get("pause_id")) for b in bodies}
     keep = retired & carried
@@ -680,16 +745,25 @@ def _without(token: dict, pids: set[str]) -> dict:
 def _request_on_disk(token: dict, pid: str) -> bool:
     """The planned-stop marker this update's stopper wrote for *pid* is still on disk (the gateway's
     watcher has not consumed it yet): the request was issued even if the updater died before
-    :func:`mark_stop_sent`. A marker naming another stopper (a user's ``hermes gateway stop``) is not."""
+    :func:`mark_stop_sent` — or the gateway's receipt of accepting it (:func:`mark_stop_accepted`).
+    A marker naming another stopper (a user's ``hermes gateway stop``) is not."""
     path = (token.get("stop_markers") or {}).get(str(pid))
     if not path:
         return False
-    from gateway.status import _marker_is_stale, _PLANNED_STOP_MARKER_TTL_S, get_process_start_time
+    from gateway.status import _PLANNED_STOP_MARKER_TTL_S
+    # An unconsumed request expires; the receipt of an accepted one is evidence for the whole drain
+    # (only the accepting incarnation is ever judged: a later one is not this entry's live process).
+    return (_names_request(token, pid, Path(path), _PLANNED_STOP_MARKER_TTL_S)
+            or _names_request(token, pid, _accepted_path(Path(path)), None))
+
+
+def _names_request(token: dict, pid: str, path: Path, ttl_s: int | None) -> bool:
+    from gateway.status import _marker_is_stale, get_process_start_time
     try:
-        marker = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+        marker = json.loads(path.read_text(encoding="utf-8-sig"))
         if (int(marker["target_pid"]) != int(pid)
                 or int(marker["stopper_pid"]) != int(token["stopper_pid"])
-                or _marker_is_stale(marker.get("written_at") or "", _PLANNED_STOP_MARKER_TTL_S)):
+                or (ttl_s is not None and _marker_is_stale(marker.get("written_at") or "", ttl_s))):
             return False
         expected, actual = marker.get("target_start_time"), get_process_start_time(int(pid))
         # Match the consumer's optional birth fingerprint, including unavailable clocks.
