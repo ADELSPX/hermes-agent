@@ -6,10 +6,10 @@ import { enBoot } from './en_boot'
 import { enCatalogInstall } from './en_catalog_install'
 import { enModelMenu } from './en_model_menu'
 import { enNotices } from './en_notices'
+import { enProjects } from './en_projects'
 import { enSharedMetrics } from './en_shared_metrics'
 import { enUninstallSection } from './en_uninstall_section'
 import type { Translations } from './types'
-import { enProjects } from './en_projects'
 
 export const en: Translations = {
   externalOpenFailed: {

@@ -4,10 +4,10 @@ import { deAuxTasks } from './de_aux_tasks'
 import { deBoot } from './de_boot'
 import { deModelMenu } from './de_model_menu'
 import { deNotices } from './de_notices'
+import { deProjects } from './de_projects'
 import { deSharedMetrics } from './de_shared_metrics'
 import { defineLocale, type TranslationOverrides } from './define-locale'
 import { introDe } from './intro-de'
-import { deProjects } from './de_projects'
 
 export const deOverrides = {
   sharedMetrics: deSharedMetrics,

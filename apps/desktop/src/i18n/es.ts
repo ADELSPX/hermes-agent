@@ -5,9 +5,9 @@ import { esAuxTasks } from './es_aux_tasks'
 import { esBoot } from './es_boot'
 import { esModelMenu } from './es_model_menu'
 import { esNotices } from './es_notices'
+import { esProjects } from './es_projects'
 import { esSharedMetrics } from './es_shared_metrics'
 import { introEs } from './intro-es'
-import { esProjects } from './es_projects'
 
 export const esOverrides = {
   sharedMetrics: esSharedMetrics,

@@ -5,8 +5,8 @@ import { introZh } from './intro-zh'
 import { zhAuxTasks } from './zh_aux_tasks'
 import { zhModelMenu } from './zh_model_menu'
 import { zhNotices } from './zh_notices'
-import { zhSharedMetrics } from './zh_shared_metrics'
 import { zhProjects } from './zh_projects'
+import { zhSharedMetrics } from './zh_shared_metrics'
 
 export const zh = defineLocale({
   externalOpenFailed: {

@@ -6,8 +6,8 @@ import { jaAuxTasks } from './ja_aux_tasks'
 import { jaModelMenu } from './ja_model_menu'
 import { jaNotices } from './ja_notices'
 import { jaPluginSettings } from './ja_plugins'
-import { jaSharedMetrics } from './ja_shared_metrics'
 import { jaProjects } from './ja_projects'
+import { jaSharedMetrics } from './ja_shared_metrics'
 
 export const ja = defineLocale({
   externalOpenFailed: {
