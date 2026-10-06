@@ -43,7 +43,7 @@ def check_schedule_wake_requirements() -> bool:
             return False
         platform = str(get_session_env("HERMES_SESSION_PLATFORM", "") or "").strip().lower()
         return platform not in _NO_WAKE_DRIVER_PLATFORMS
-    except Exception:
+    except ImportError:
         return True
 
 
@@ -81,7 +81,7 @@ def _gateway_route() -> Dict[str, str]:
             "profile": get_session_env("HERMES_SESSION_PROFILE", ""),
         }
         return {k: str(v) for k, v in route.items() if v}
-    except Exception:
+    except ImportError:
         return {}
 
 
@@ -91,19 +91,16 @@ def schedule_wake_tool(args: dict, session_id: Optional[str] = None) -> str:
         return tool_error("schedule_wake needs a non-empty prompt: the message injected when the wake fires.")
     if str(args.get("recurring", False)).lower() in {"1", "true", "yes"}:
         return tool_error("schedule_wake is one-shot; for recurring wake-ups use /heartbeat.")
-    try:
-        from agent.delegation_context import is_delegated_child_context
+    from agent.delegation_context import is_delegated_child_context
 
-        if is_delegated_child_context():
-            return tool_error(
-                "schedule_wake arms the CALLING session's idle loop; a subagent session has no loop "
-                "to fire it. The orchestrating session must arm its own wake."
-            )
-    except Exception:
-        pass
+    if is_delegated_child_context():
+        return tool_error(
+            "schedule_wake arms the CALLING session's idle loop; a subagent session has no loop "
+            "to fire it. The orchestrating session must arm its own wake."
+        )
     try:
         fires_at = _resolve_fires_at(args)
-    except Exception as exc:
+    except (ValueError, TypeError, OverflowError) as exc:
         return tool_error(f"schedule_wake: {exc}")
     if fires_at - time.time() < MIN_WAKE_DELAY_SECONDS - 1:  # 1s slack for clock reads
         return tool_error(
@@ -119,7 +116,7 @@ def schedule_wake_tool(args: dict, session_id: Optional[str] = None) -> str:
         state = schedule_wake(sid, prompt, fires_at, route=_gateway_route())
     except WakeBudgetExhausted as exc:
         return tool_error(f"schedule_wake refused: {exc}")
-    except Exception as exc:
+    except ValueError as exc:
         return tool_error(f"schedule_wake failed: {exc}")
     return json.dumps(
         {"success": True, "session_id": sid, "fires_at": fires_at, "prompt": prompt,

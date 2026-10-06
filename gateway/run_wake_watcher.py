@@ -69,8 +69,8 @@ async def wake_fire_one(
         logger.info("wake firing for %s chat=%s thread=%s", platform_name, source.chat_id, source.thread_id)
         await adapter.handle_message(runner._synthetic_prompt_event(source, prompt, internal=True))
         return True
-    except Exception as exc:
-        logger.warning("wake injection failed for %s: %s", sid, exc)
+    except Exception:  # health: allow BLE001 -- adapter boundary (any platform SDK error); refund the fire so it stays armed
+        logger.warning("wake injection failed for %s", sid, exc_info=True)
         with suppress(Exception):
             await runner._run_in_executor_with_context(abandon_wake_fire, sid)
         return False
@@ -109,6 +109,6 @@ async def wake_watcher(runner: Any, interval: float = WAKE_WATCH_INTERVAL_SECOND
                     continue
                 async with _scope(profile_home):
                     await _scan_one_store(profile_name)
-        except Exception as exc:
-            logger.debug("wake watcher error: %s", exc)
+        except Exception:  # health: allow BLE001 -- supervised watcher loop must survive any scan error; same shape as _loop_wakeup_watcher
+            logger.debug("wake watcher error", exc_info=True)
         await asyncio.sleep(interval)

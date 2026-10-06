@@ -51,7 +51,8 @@ def max_fires() -> int:
 
         section = (load_config() or {}).get("wake") or {}
         return max(0, int(section.get("max_fires", DEFAULT_MAX_FIRES)))
-    except Exception:
+    except (OSError, ValueError, TypeError, AttributeError) as exc:
+        logger.debug("wake: config read failed (%s); using default budget", exc)
         return DEFAULT_MAX_FIRES
 
 
@@ -105,15 +106,15 @@ def _get_session_db() -> Optional[Any]:
         from hermes_cli.goals import _get_session_db as _goals_db
 
         return _goals_db()
-    except Exception as exc:  # pragma: no cover - defensive
-        logger.debug("wake: SessionDB bootstrap failed (%s)", exc)
+    except Exception:  # health: allow BLE001 -- SessionDB bootstrap boundary; the heartbeat/loop twins degrade to no-op the same way
+        logger.debug("wake: SessionDB bootstrap failed", exc_info=True)
         return None
 
 
 def _parse(raw: Any, session_id: str) -> Optional[WakeState]:
     try:
         return WakeState.from_json(raw) if raw else None
-    except Exception as exc:
+    except (ValueError, TypeError, KeyError) as exc:
         logger.warning("wake: could not parse stored wake for %s: %s", session_id, exc)
         return None
 
@@ -124,8 +125,8 @@ def load_wake(session_id: str) -> Optional[WakeState]:
         return None
     try:
         raw = db.get_meta(_WAKE_PREFIX + session_id)
-    except Exception as exc:
-        logger.debug("wake: get_meta failed (%s)", exc)
+    except Exception:  # health: allow BLE001 -- sqlite read boundary (OperationalError, closed db); a wake must never crash the idle loop
+        logger.debug("wake: get_meta failed", exc_info=True)
         return None
     return _parse(raw, session_id)
 
@@ -141,8 +142,8 @@ def save_wake(session_id: str, state: WakeState) -> None:
         return
     try:
         db.set_meta(_WAKE_PREFIX + session_id, state.to_json())
-    except Exception as exc:
-        logger.debug("wake: set_meta failed (%s)", exc)
+    except Exception:  # health: allow BLE001 -- sqlite write boundary; same contract as save_heartbeat
+        logger.debug("wake: set_meta failed", exc_info=True)
 
 
 def clear_wake(session_id: str) -> None:
@@ -153,8 +154,8 @@ def clear_wake(session_id: str) -> None:
         return
     try:
         db.set_meta(_WAKE_PREFIX + session_id, "")
-    except Exception as exc:  # pragma: no cover - defensive
-        logger.debug("wake: clear failed (%s)", exc)
+    except Exception:  # health: allow BLE001 -- sqlite write boundary; same contract as save_heartbeat
+        logger.debug("wake: clear failed", exc_info=True)
 
 
 def store_has_armed_wake(db: Any) -> bool:
@@ -177,8 +178,8 @@ def list_armed_wakes() -> List[Tuple[str, WakeState]]:
     out: List[Tuple[str, WakeState]] = []
     try:
         rows = db.list_meta_prefix(_WAKE_PREFIX)
-    except Exception as exc:
-        logger.debug("wake: list_meta_prefix failed (%s)", exc)
+    except Exception:  # health: allow BLE001 -- sqlite read boundary on the gateway watcher's scan; empty list = retry next tick
+        logger.debug("wake: list_meta_prefix failed", exc_info=True)
         return []
     for key, raw in rows:
         sid = key[len(_WAKE_PREFIX):]
@@ -260,8 +261,8 @@ def migrate_wake_to_session(old_session_id: str, new_session_id: str) -> bool:
         save_wake(new_session_id, state)
         clear_wake(old_session_id)
         return True
-    except Exception as exc:  # pragma: no cover - defensive
-        logger.debug("wake: migrate failed (%s)", exc)
+    except Exception:  # health: allow BLE001 -- compression must never fail on wake bookkeeping; same contract as migrate_heartbeat_to_session
+        logger.debug("wake: migrate failed", exc_info=True)
         return False
 
 

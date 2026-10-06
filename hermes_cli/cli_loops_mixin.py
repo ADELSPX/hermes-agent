@@ -665,8 +665,8 @@ class CLILoopsMixin:
             prompt = due_wake_prompt(sid, now)
             if prompt:
                 self._pending_input.put(prompt)
-        except Exception as exc:
-            logging.debug("wake fire check failed: %s", exc)
+        except Exception:  # health: allow BLE001 -- idle-hook boundary; a wake read error must never kill the REPL loop (loop/goal hooks do the same)
+            logging.debug("wake fire check failed", exc_info=True)
 
     def _last_assistant_response_text(self) -> str:
         """Text of the most recent assistant message ("" when none); multimodal parts are flattened."""

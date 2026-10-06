@@ -271,10 +271,8 @@ def _maybe_fire_tui_wake(sid: str, session: dict) -> None:
     never starts a turn rewinds the persisted fire so the wake stays armed. A wake armed inside a
     messaging chat carries a gateway route and belongs to the gateway's wake watcher.
     """
-    try:
-        from hermes_cli.wake import abandon_wake_fire, due_wake_prompt, load_wake, route_is_gateway_chat
-    except Exception:
-        return
+    from hermes_cli.wake import abandon_wake_fire, due_wake_prompt, load_wake, route_is_gateway_chat
+
     if not (sid_key := session.get("session_key") or ""):
         return
     state = load_wake(sid_key)
@@ -289,7 +287,7 @@ def _maybe_fire_tui_wake(sid: str, session: dict) -> None:
     try:
         _emit("status.update", sid, {"kind": "wake", "text": "⏰ scheduled wake firing…"})
         started = bool(_run_prompt_submit(f"__wake__{int(time.time() * 1000)}", sid, session, prompt))
-    except Exception as exc:
+    except Exception as exc:  # health: allow BLE001 -- dispatch boundary; logged via _notif_log_failure and the fire is refunded below
         _notif_log_failure("wake dispatch failed", exc)
     if not started:
         _notif_release_turn(session)

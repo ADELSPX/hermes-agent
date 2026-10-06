@@ -446,15 +446,11 @@ class CronPromptInjectionBlocked(Exception):
 
 
 def _resolve_cron_disabled_toolsets(cfg: dict) -> list[str]:
-    """Toolsets a cron-spawned agent must never receive: ``messaging``/``clarify`` always
-    (interactive) and ``wake`` always (a cron session ends with its turn, so a self-scheduled
-    wake would be armed-but-dead; recurrence is the job's own schedule); ``cronjob`` by default
-    (loop prevention, not a security boundary — ``cron.allow_agent_scheduling: true`` lifts only
-    that); ``agent.disabled_toolsets`` layered on top so per-job ``enabled_toolsets`` cannot widen
-    past config.yaml's denylist.
-
-    See #25752.
-    """
+    """Toolsets a cron-spawned agent must never receive: ``messaging``/``clarify`` (interactive) and
+    ``wake`` (the session ends with the turn: a self-wake would be armed-but-dead) always; ``cronjob``
+    by default (loop prevention, not a security boundary — ``cron.allow_agent_scheduling: true`` lifts
+    only that); ``agent.disabled_toolsets`` layered on top so per-job ``enabled_toolsets`` cannot
+    widen past config.yaml's denylist. See #25752."""
     cron_cfg = (cfg or {}).get("cron") or {}
     if cron_cfg.get("allow_agent_scheduling"):
         disabled = ["messaging", "clarify", "wake"]
