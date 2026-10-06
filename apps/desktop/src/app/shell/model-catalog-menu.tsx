@@ -970,6 +970,25 @@ interface ModelFamilyRowProps {
  *  model, plus the hover-revealed options submenu. Shared by the Favorites
  *  section and the provider groups, so the two can never paint a model
  *  differently. */
+/** The speed chip a family row shows for the row's exact tier: the bounded
+ *  policies (auto/cold) are a saved policy even while their window is closed,
+ *  and ultrafast outranks the generic fast word (#132275). */
+function familyRowSpeedChip(
+  tier: string | undefined,
+  fastOn: boolean,
+  words: { auto: string; cold: string; fast: string; ultrafast: string }
+): string | null {
+  if (tier === 'ultrafast') {
+    return words.ultrafast
+  }
+
+  if (tier === 'auto' || tier === 'cold') {
+    return words[tier]
+  }
+
+  return fastOn ? words.fast : null
+}
+
 function ModelFamilyRow({
   controller,
   current,
@@ -1036,17 +1055,15 @@ function ModelFamilyRow({
   // on a row whose remembered preset chose one.
   const settings = [
     // Show the exact POLICY, not just "Fast": a bounded auto/cold tier is a
-    // saved policy even while its window is closed, and ultrafast outranks the
-    // generic fast word (#132275).
+    // saved policy even while its window is closed (#132275).
     fastControl.kind === 'none'
       ? null
-      : effTier === 'ultrafast'
-        ? t.shell.modelOptions.ultrafast
-        : effTier === 'auto' || effTier === 'cold'
-          ? t.shell.modelOptions[effTier]
-          : fastControl.on && !(fastControl.kind === 'param' && fastControl.canEnable === false)
-            ? copy.fast
-            : null,
+      : familyRowSpeedChip(effTier, fastControl.on && !(fastControl.kind === 'param' && fastControl.canEnable === false), {
+          auto: t.shell.modelOptions.auto,
+          cold: t.shell.modelOptions.cold,
+          fast: copy.fast,
+          ultrafast: t.shell.modelOptions.ultrafast
+        }),
     (caps?.reasoning ?? true) && (isCurrent ? !current.effortPending : Boolean(effEffort))
       ? reasoningEffortLabel(effEffort || defaultEffort, isCurrent ? current.effortWire : undefined)
       : null

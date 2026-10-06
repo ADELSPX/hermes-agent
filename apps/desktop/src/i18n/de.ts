@@ -3,6 +3,7 @@ import { defineFieldCopy } from '@/app/settings/field-copy'
 import { deAuxTasks } from './de_aux_tasks'
 import { deBoot } from './de_boot'
 import { deModelMenu } from './de_model_menu'
+import { deModelOptions } from './de_model_options'
 import { deNotices } from './de_notices'
 import { deSharedMetrics } from './de_shared_metrics'
 import { defineLocale, type TranslationOverrides } from './define-locale'
@@ -4901,28 +4902,7 @@ export const deOverrides = {
     paneControls: 'Panele-Bedienelemente',
     appControls: 'App-Bedienelemente',
     modelMenu: deModelMenu,
-    modelOptions: {
-      noOptions: 'Keine Optionen für dieses Modell',
-      options: 'Optionen',
-      thinking: 'Denken',
-      fast: 'Schnell',
-      ultrafast: 'Ultrafast',
-      useStandardSpeed: 'Standardgeschwindigkeit verwenden',
-      auto: 'Automatisch',
-      cold: 'Kalt',
-      speedPolicy: 'Geschwindigkeitsrichtlinie',
-      effort: 'Aufwand',
-      minimal: 'Minimal',
-      low: 'Niedrig',
-      medium: 'Mittel',
-      high: 'Hoch',
-      xhigh: 'Extra hoch',
-      max: 'Max',
-      ultra: 'Ultra',
-      sendsOnRoute: (level: string) => `sendet ${level} auf dieser Route`,
-      updateFailed: 'Aktualisierung der Modelloptie schlug fehl',
-      fastFailed: 'Aktualisierung des Schnell-Modus schlug fehl'
-    },
+    modelOptions: deModelOptions,
     gatewayMenu: {
       gateway: 'Gateway',
       connected: 'Verbunden',

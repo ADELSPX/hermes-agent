@@ -3,6 +3,7 @@ import { defineFieldCopy } from '@/app/settings/field-copy'
 import { defineLocale } from './define-locale'
 import { ruAuxTasks } from './ru_aux_tasks'
 import { ruModelMenu } from './ru_model_menu'
+import { ruModelOptions } from './ru_model_options'
 import { ruNotices } from './ru_notices'
 import { ruPluginSettings } from './ru_plugins'
 import { ruSharedMetrics } from './ru_shared_metrics'
@@ -3481,28 +3482,7 @@ export const ru = defineLocale({
     paneControls: 'Управление панелями',
     appControls: 'Управление приложением',
     modelMenu: ruModelMenu,
-    modelOptions: {
-      noOptions: 'Для этой модели нет опций',
-      options: 'Опции',
-      thinking: 'Размышление',
-      fast: 'Быстрая',
-      ultrafast: 'Ultrafast',
-      useStandardSpeed: 'Использовать стандартную скорость',
-      auto: 'Авто',
-      cold: 'Холодный',
-      speedPolicy: 'Политика скорости',
-      effort: 'Усилия',
-      minimal: 'Минимально',
-      low: 'Низкое',
-      medium: 'Среднее',
-      high: 'Высокое',
-      xhigh: 'Очень высокое',
-      max: 'Максимум',
-      ultra: 'Ультра',
-      sendsOnRoute: (level: string) => `на этом маршруте отправляется ${level}`,
-      updateFailed: 'Не удалось обновить опцию модели',
-      fastFailed: 'Не удалось обновить быстрый режим'
-    },
+    modelOptions: ruModelOptions,
     gatewayMenu: {
       gateway: 'Шлюз',
       connected: 'Подключён',

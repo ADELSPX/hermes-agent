@@ -4,6 +4,7 @@ import { defineLocale, type TranslationOverrides } from './define-locale'
 import { frAuxTasks } from './fr_aux_tasks'
 import { frBoot } from './fr_boot'
 import { frModelMenu } from './fr_model_menu'
+import { frModelOptions } from './fr_model_options'
 import { frNotices } from './fr_notices'
 import { frSharedMetrics } from './fr_shared_metrics'
 import { introFr } from './intro-fr'
@@ -4915,28 +4916,7 @@ export const frOverrides = {
     paneControls: 'Contrôles de panneau',
     appControls: "Contrôles d'application",
     modelMenu: frModelMenu,
-    modelOptions: {
-      noOptions: 'Aucune option pour ce modèle',
-      options: 'Options',
-      thinking: 'Réflexion',
-      fast: 'Rapide',
-      ultrafast: 'Ultrafast',
-      useStandardSpeed: 'Utiliser la vitesse standard',
-      auto: 'Auto',
-      cold: 'Froid',
-      speedPolicy: 'Politique de vitesse',
-      effort: 'Effort',
-      minimal: 'Minimal',
-      low: 'Faible',
-      medium: 'Moyen',
-      high: 'Élevé',
-      xhigh: 'Très élevé',
-      max: 'Max',
-      ultra: 'Ultra',
-      sendsOnRoute: (level: string) => `envoie ${level} sur cette route`,
-      updateFailed: "Échec de la mise à jour de l'option du modèle",
-      fastFailed: 'Échec de la mise à jour du mode rapide'
-    },
+    modelOptions: frModelOptions,
     gatewayMenu: {
       gateway: 'Gateway',
       connected: 'Connecté',

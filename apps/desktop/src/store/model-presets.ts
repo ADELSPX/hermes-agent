@@ -30,6 +30,11 @@ export interface ModelPreset {
 export const modelPresetServiceTier = ({ fast, serviceTier }: ModelPreset): string | undefined =>
   serviceTier ?? (fast === undefined ? undefined : fast ? 'priority' : 'normal')
 
+/** The bounded policies (`/fast auto`, `/fast cold`): the fast window opens on
+ *  the backend's clock, so the composer/tile boolean `fast` stays off and only
+ *  the exact tier rides (#132275). */
+export const isBoundedSpeedPolicy = (tier: string | undefined): boolean => tier === 'auto' || tier === 'cold'
+
 type RequestGateway = <T>(method: string, params?: Record<string, unknown>) => Promise<T>
 
 /** Stable `provider::model` key (matches the visibility-store format). */
@@ -97,10 +102,7 @@ export async function applyModelPreset(
 ): Promise<void> {
   const { effort } = preset
   const tier = modelPresetServiceTier(preset)
-  // Bounded policies (auto/cold) are NOT "fast on": the window opens on the
-  // backend's clock, so the composer/tile boolean stays off and only the exact
-  // tier rides (config.set `fast` accepts the words; create pins the tier).
-  const fast = tier === undefined ? undefined : tier !== 'normal' && tier !== 'auto' && tier !== 'cold'
+  const fast = tier === undefined ? undefined : tier !== 'normal' && !isBoundedSpeedPolicy(tier)
   const primary = ctx.primary ?? true
   const oldOwner = $activeSessionId.get()
   const slice = $sessionStates.get()[ctx.sessionId ?? '']
@@ -189,7 +191,7 @@ export async function applyModelPreset(
         const confirmed: ModelPreset =
           dimension === 'effort'
             ? { effort: confirmedValue }
-            : { serviceTier: confirmedValue || 'normal', fast: !!confirmedValue && confirmedValue !== 'normal' && confirmedValue !== 'auto' && confirmedValue !== 'cold' }
+            : { serviceTier: confirmedValue || 'normal', fast: !!confirmedValue && confirmedValue !== 'normal' && !isBoundedSpeedPolicy(confirmedValue) }
 
         ctx.onFailure?.(dimension, confirmed)
 

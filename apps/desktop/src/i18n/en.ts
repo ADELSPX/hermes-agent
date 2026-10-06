@@ -3,6 +3,7 @@ import { FIELD_DESCRIPTIONS, FIELD_LABELS } from '@/app/settings/constants'
 import { enAuxTasks } from './en_aux_tasks'
 import { enBoot } from './en_boot'
 import { enModelMenu } from './en_model_menu'
+import { enModelOptions } from './en_model_options'
 import { enNotices } from './en_notices'
 import { enSharedMetrics } from './en_shared_metrics'
 import type { Translations } from './types'
@@ -4495,28 +4496,7 @@ export const en: Translations = {
     paneControls: 'Pane controls',
     appControls: 'App controls',
     modelMenu: enModelMenu,
-    modelOptions: {
-      noOptions: 'No options for this model',
-      options: 'Options',
-      thinking: 'Thinking',
-      fast: 'Fast',
-      ultrafast: 'Ultrafast',
-      useStandardSpeed: 'Use standard speed',
-      auto: 'Auto',
-      cold: 'Cold',
-      effort: 'Effort',
-      minimal: 'Minimal',
-      low: 'Low',
-      medium: 'Medium',
-      high: 'High',
-      xhigh: 'Extra High',
-      max: 'Max',
-      ultra: 'Ultra',
-      sendsOnRoute: (level: string) => `sends ${level} on this route`,
-      updateFailed: 'Model option update failed',
-      speedPolicy: 'Speed policy',
-      fastFailed: 'Fast mode update failed'
-    },
+    modelOptions: enModelOptions,
     gatewayMenu: {
       gateway: 'Gateway',
       connected: 'Connected',

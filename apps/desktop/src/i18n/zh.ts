@@ -4,6 +4,7 @@ import { defineLocale } from './define-locale'
 import { introZh } from './intro-zh'
 import { zhAuxTasks } from './zh_aux_tasks'
 import { zhModelMenu } from './zh_model_menu'
+import { zhModelOptions } from './zh_model_options'
 import { zhNotices } from './zh_notices'
 import { zhSharedMetrics } from './zh_shared_metrics'
 
@@ -4269,28 +4270,7 @@ export const zh = defineLocale({
     paneControls: '面板控件',
     appControls: '应用控件',
     modelMenu: zhModelMenu,
-    modelOptions: {
-      noOptions: '此模型没有可用选项',
-      options: '选项',
-      thinking: '思考',
-      fast: '快速',
-      ultrafast: 'Ultrafast',
-      useStandardSpeed: '使用标准速度',
-      auto: '自动',
-      cold: '冷启动',
-      speedPolicy: '速度策略',
-      effort: '推理强度',
-      minimal: '最小',
-      low: '低',
-      medium: '中',
-      high: '高',
-      xhigh: '极高',
-      max: '最高',
-      ultra: '超高',
-      sendsOnRoute: (level: string) => `此路由实际发送 ${level}`,
-      updateFailed: '模型选项更新失败',
-      fastFailed: '快速模式更新失败'
-    },
+    modelOptions: zhModelOptions,
     gatewayMenu: {
       gateway: '网关',
       connected: '已连接',

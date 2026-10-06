@@ -11,6 +11,7 @@ import type { TipId } from '@/lib/tips/catalog'
 import type { AuxTaskCopyMap } from './types_aux_tasks'
 import type { BootTranslations } from './types_boot'
 import type { ModelMenuTranslations } from './types_model_menu'
+import type { ModelOptionsTranslations } from './types_model_options'
 import type { NoticeTranslations } from './types_notices'
 import type { SharedMetricsTranslations } from './types_shared_metrics'
 
@@ -3762,29 +3763,7 @@ export interface Translations extends NoticeTranslations {
     paneControls: string
     appControls: string
     modelMenu: ModelMenuTranslations
-    modelOptions: {
-      noOptions: string
-      options: string
-      thinking: string
-      fast: string
-      ultrafast: string
-      useStandardSpeed: string
-      auto: string
-      cold: string
-      effort: string
-      minimal: string
-      low: string
-      medium: string
-      high: string
-      xhigh: string
-      max: string
-      ultra: string
-      /** The CLI's `/reasoning` clamp note, e.g. "sends Max on this route". */
-      sendsOnRoute: (level: string) => string
-      updateFailed: string
-      speedPolicy: string
-      fastFailed: string
-    }
+    modelOptions: ModelOptionsTranslations
     gatewayMenu: {
       gateway: string
       connected: string
