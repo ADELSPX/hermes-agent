@@ -37,6 +37,7 @@ import { getOverlayState, patchOverlayState, SENSITIVE_PROMPTS } from './overlay
 import { flashGoodVibes, flashPet } from './petFlashStore.js'
 import { forgetServerRequest } from './serverRequestStore.js'
 import { reportStartupLatency } from './startupLatency.js'
+import { markNextSubmitVoice } from './submissionCore.js'
 import { turnController } from './turnController.js'
 import { getTurnState } from './turnStore.js'
 import { getUiState, patchUiState } from './uiStore.js'
@@ -1103,6 +1104,7 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
           // is committed before submit reads it; invalid config also falls
           // back to this established direct-submit behavior.
           setInput('')
+          markNextSubmitVoice(text)
           setTimeout(() => submitRef.current(text), 0)
         })
 
