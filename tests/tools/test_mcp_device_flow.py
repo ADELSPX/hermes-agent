@@ -40,14 +40,19 @@ def test_device_login_failure_does_not_persist_or_disclose_credentials(mode):
     assert "Authenticated" not in result["output"], result
 
 
-@pytest.mark.parametrize("mode", ["offline", "offline_unscoped"])
-def test_device_login_requests_offline_access_when_the_server_advertises_it(mode):
+@pytest.mark.parametrize("mode", ["offline", "offline_unscoped", "offline_norefresh"])
+def test_device_login_requests_offline_access_only_when_the_server_can_refresh(mode):
     result = run_cli(Path(__file__).resolve().parents[2], mode)
     assert result["token_persisted"], result
     assert "Authenticated" in result["output"], result
     device_requests = [row for row in result["wire"] if row["path"] == "/device"]
     assert len(device_requests) == 1, result
     requested = (device_requests[0]["data"].get("scope") or "").split()
-    assert "offline_access" in requested, result
-    if mode == "offline":
-        assert "fixture.read" in requested, result
+    # A refresh-token grant must be advertised for offline_access to mean anything.
+    assert ("offline_access" in requested) == (mode != "offline_norefresh"), result
+    # Base scope: the configured one when set, else the resource's advertised tool scopes
+    # (never the authorization server's offline_access alone).
+    assert ("mcp:read" if mode == "offline_unscoped" else "fixture.read") in requested, result
+    # RFC 6749 §5.1: a token response without `scope` was granted what was requested,
+    # so the persisted scope must be the wire request, not the pre-derivation config.
+    assert (result["persisted_scope"] or "").split() == requested, result
