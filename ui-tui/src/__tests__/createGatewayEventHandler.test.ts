@@ -2425,7 +2425,11 @@ describe('createGatewayEventHandler', () => {
       const onEvent = createGatewayEventHandler(buildCtx([]))
 
       patchUiState({ sid: 'sess-active' })
-      onEvent({ payload: { text: 'leaked delta' }, session_id: 'sess-other', type: 'message.delta' } satisfies GatewayEvent)
+      onEvent({
+        payload: { text: 'leaked delta' },
+        session_id: 'sess-other',
+        type: 'message.delta'
+      } satisfies GatewayEvent)
       expect(turnController.bufRef).toBe('')
 
       onEvent({ payload: { text: 'leaked delta 2' }, session_id: '', type: 'message.delta' } satisfies GatewayEvent)
@@ -2433,7 +2437,11 @@ describe('createGatewayEventHandler', () => {
 
       // and inside the null-sid switch window, every session-scoped event drops
       patchUiState({ sid: null })
-      onEvent({ payload: { text: 'leaked during switch' }, session_id: 'sess-other', type: 'message.delta' } satisfies GatewayEvent)
+      onEvent({
+        payload: { text: 'leaked during switch' },
+        session_id: 'sess-other',
+        type: 'message.delta'
+      } satisfies GatewayEvent)
       expect(turnController.bufRef).toBe('')
 
       // An event with NO session_id key is unscoped by design (CLI-direct or
